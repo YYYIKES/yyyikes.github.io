@@ -796,7 +796,10 @@
                 }
                 this.activeBreak = null;
                 this.onBreak = false;
-                this.isPaused = true;
+                // --- START OF CHANGE ---
+                // Automatically resume the main timer instead of just pausing.
+                this.start();
+                // --- END OF CHANGE ---
                 updateTimerDisplay(this.id);
             }
 
@@ -928,7 +931,6 @@
             else startBtn.textContent = 'Start';
             startBtn.disabled = timer.isFinished || !!timer.activeBreak;
 
-            // --- START OF FINAL FIX ---
             const controlsRightContainer = card.querySelector('.timer-controls-right');
             if (controlsRightContainer) {
                 if (timer.activeBreak) {
@@ -963,7 +965,6 @@
                     }
                 }
             }
-            // --- END OF FINAL FIX ---
 
             const chimeBtn = card.querySelector('button[onclick*="toggleChime"]');
             chimeBtn.classList.toggle('secondary', !timer.chimeEnabled);

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Exam Timer Manager v2.2</title>
+    <title>Exam Timer Manager v2.3</title>
     <style>
         /* CSS Variables for theming */
         :root {
@@ -923,13 +923,41 @@
             else startBtn.textContent = 'Start';
             startBtn.disabled = timer.isFinished || !!timer.activeBreak;
 
+            // --- START OF FIX ---
             const controlsRightContainer = card.querySelector('.timer-controls-right');
             if (controlsRightContainer) {
-                 const newHTML = `<button class="secondary" onclick="openBreakModal(${timer.id})">Edit Breaks</button>${generateBreakButtons(timer)}`;
-                 if(controlsRightContainer.innerHTML !== newHTML) {
-                    controlsRightContainer.innerHTML = newHTML;
-                 }
+                // If a break is active, we want to avoid re-rendering the whole button,
+                // which can interfere with click events. Instead, we'll just update the text.
+                if (timer.activeBreak) {
+                    const breakIndex = timer.activeBreak.index;
+                    const activeBtn = document.getElementById(`break-btn-${timer.id}-${breakIndex}`);
+
+                    const remaining = Math.ceil(timer.activeBreak.remaining);
+                    const minutes = Math.floor(remaining / 60);
+                    const seconds = remaining % 60;
+                    const newText = `${minutes}m ${seconds}s`;
+
+                    // If the active button already exists, just update its text.
+                    if (activeBtn && activeBtn.classList.contains('active')) {
+                        if (activeBtn.textContent !== newText) {
+                            activeBtn.textContent = newText;
+                        }
+                    } else {
+                        // If the button doesn't exist, it means the break just started.
+                        // In this case, we need to do a full re-render of the controls.
+                        const newHTML = `<button class="secondary" onclick="openBreakModal(${timer.id})">Edit Breaks</button>${generateBreakButtons(timer)}`;
+                        controlsRightContainer.innerHTML = newHTML;
+                    }
+                } else {
+                    // If no break is active, a full re-render is safe and ensures consistency.
+                    const newHTML = `<button class="secondary" onclick="openBreakModal(${timer.id})">Edit Breaks</button>${generateBreakButtons(timer)}`;
+                    // Only re-render if the HTML has actually changed.
+                    if (controlsRightContainer.innerHTML !== newHTML) {
+                        controlsRightContainer.innerHTML = newHTML;
+                    }
+                }
             }
+            // --- END OF FIX ---
 
             const chimeBtn = card.querySelector('button[onclick*="toggleChime"]');
             chimeBtn.classList.toggle('secondary', !timer.chimeEnabled);

@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Exam Timer Manager - Help</title>
+	<style>
+		/* CSS Variables for theming (mirrors the main app) */
+		:root {
+			--bg-primary: #ffffff;
+			--bg-secondary: #f5f5f5;
+			--bg-card: #ffffff;
+			--text-primary: #1a1a1a;
+			--text-secondary: #666666;
+			--border-color: #e0e0e0;
+			--accent-color: #2563eb;
+			--shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+		}
+
+		[data-theme="dark"] {
+			--bg-primary: #1a1a1a;
+			--bg-secondary: #2a2a2a;
+			--bg-card: #2a2a2a;
+			--text-primary: #f0f0f0;
+			--text-secondary: #a0a0a0;
+			--border-color: #404040;
+			--accent-color: #3b82f6;
+			--shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+		}
+
+		/* Base styles */
+		* {
+			margin: 0;
+			padding: 0;
+			box-sizing: border-box;
+		}
+
+		body {
+			font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+			background-color: var(--bg-primary);
+			color: var(--text-primary);
+			min-height: 100vh;
+			padding: 2rem;
+			transition: background-color 0.3s, color 0.3s;
+		}
+
+		/* Container for the README content */
+		.readme-container {
+			max-width: 800px;
+			margin: 0 auto;
+			background-color: var(--bg-card);
+			border: 1px solid var(--border-color);
+			border-radius: 6px;
+			padding: 2rem 3rem;
+			box-shadow: var(--shadow);
+		}
+
+		/* Typography and element styling */
+		h1,
+		h2,
+		h3 {
+			margin-bottom: 1rem;
+			color: var(--text-primary);
+		}
+
+		h1 {
+			font-size: 2.5rem;
+			border-bottom: 1px solid var(--border-color);
+			padding-bottom: 0.5rem;
+			margin-bottom: 1.5rem;
+		}
+
+		h2 {
+			font-size: 1.75rem;
+			margin-top: 2rem;
+		}
+
+		p,
+		ul,
+		ol {
+			margin-bottom: 1rem;
+			line-height: 1.7;
+			color: var(--text-secondary);
+		}
+
+		ul,
+		ol {
+			padding-left: 25px;
+		}
+
+		li {
+			margin-bottom: 0.5rem;
+		}
+
+		strong {
+			color: var(--text-primary);
+			font-weight: 600;
+		}
+
+		code {
+			background-color: var(--bg-secondary);
+			padding: 0.2em 0.4em;
+			margin: 0;
+			font-size: 85%;
+			border-radius: 3px;
+			font-family: 'Courier New', Courier, monospace;
+			color: var(--text-primary);
+		}
+
+		img {
+			max-width: 100%;
+			border-radius: 6px;
+			margin-top: 1rem;
+			margin-bottom: 1.5rem;
+			border: 1px solid var(--border-color);
+		}
+
+		/* Check for user's preferred color scheme */
+		@media (prefers-color-scheme: dark) {
+			:root:not([data-theme="light"]) {
+				--bg-primary: #1a1a1a;
+				--bg-secondary: #2a2a2a;
+				--bg-card: #2a2a2a;
+				--text-primary: #f0f0f0;
+				--text-secondary: #a0a0a0;
+				--border-color: #404040;
+				--accent-color: #3b82f6;
+				--shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+			}
+		}
+	</style>
+</head>
+
+<body>
+	<div class="readme-container">
+		<h1>Exam Timer Manager</h1>
+		<p>An advanced, browser-based timer application designed to help students and professionals manage their time
+			effectively during exams, study sessions, or complex tasks. This tool allows for the creation of multiple,
+			independent timers, each with configurable durations, labels, and break schedules.</p>
+
+		<h2>Features</h2>
+		<ul>
+			<li><strong>Multiple Timers</strong>: Add as many timers as you need to manage different sections or tasks
+				simultaneously.</li>
+			<li><strong>Global Controls</strong>: Start, pause, reset, and remove all timers with a single click.</li>
+			<li><strong>Count Up / Count Down</strong>: Easily switch the direction for all timers.</li>
+			<li><strong>Configurable Breaks</strong>: For each timer, you can set a specific number of breaks and their
+				duration.</li>
+			<li><strong>Persistent State</strong>: Your timer setup (including durations, labels, and progress) is
+				automatically saved to your browser's local storage and reloaded when you reopen the app.</li>
+			<li><strong>UI Locking</strong>: Lock the interface to prevent accidental changes during an exam.</li>
+			<li><strong>Customizable Labels</strong>: Click on any timer's title to rename it.</li>
+			<li><strong>Easy Time Editing</strong>: Click on a timer's display (when paused) to quickly set a new
+				duration in HHMM format.</li>
+			<li><strong>Dark Mode</strong>: Switch between light and dark themes for your comfort.</li>
+			<li><strong>Volume Control</strong>: Adjust the volume of the end-of-time chime.</li>
+			<li><strong>Responsive Design</strong>: The layout adapts for optimal use on both desktop and mobile
+				devices.</li>
+		</ul>
+
+		<h2>How to Use</h2>
+		<ol>
+			<li><strong>Add a Timer</strong>: Click the <code>+ Add Timer</code> button to create a new timer. It will
+				start with a default duration of 60 minutes.</li>
+			<li><strong>Set Duration</strong>: Click on the time display (e.g., "60m 00s") of any paused timer. A prompt
+				will appear asking for the time in <code>HHMM</code> format (e.g., <code>0130</code> for 1 hour and 30
+				minutes).</li>
+			<li><strong>Rename Timer</strong>: Click on the "Timer X" label to give it a more descriptive name.</li>
+			<li><strong>Control Timers</strong>: Use the <code>Start</code>, <code>Pause</code>, and <code>Reset</code>
+				buttons on individual cards or use the global controls at the top of the page.</li>
+			<li><strong>Manage Breaks</strong>:
+				<ul>
+					<li>Click <code>Edit Breaks</code> on a timer to configure the number of breaks and their duration.
+					</li>
+					<li>Click the <code>X min Break</code> button during a session to start a break. The main timer will
+						pause, and a break timer will begin.</li>
+				</ul>
+			</li>
+			<li><strong>Lock UI</strong>: Once your timers are set up, click the <code>🔓 Unlocked</code> button to lock
+				the UI, preventing accidental clicks.</li>
+			<li><strong>Save/Load</strong>: Your session is saved automatically. Simply close the tab and reopen it
+				later to resume where you left off.</li>
+		</ol>
+
+		<h2>Running Locally</h2>
+		<p>No server is needed. Just open the <code>exam-timer.html</code> file in any modern web browser.</p>
+	</div>
+</body>
+
+</html>

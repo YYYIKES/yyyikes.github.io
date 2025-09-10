@@ -1258,7 +1258,7 @@
         // Initialize on load
         window.addEventListener('load', () => {
             loadState();
-            setInterval(updateAllDisplays, 250);
+            setInterval(updateAllDisplays, 1000); // Changed from 250ms to 1000ms for smoother display
             document.addEventListener('click', initAudioContext, { once: true });
         });
 

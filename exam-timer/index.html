@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Exam Timer Manager v3.0</title>
+    <title>Exam Timer Manager v4.0</title>
     <style>
         /* CSS Variables for theming */
         :root {
@@ -615,654 +615,670 @@
         </div>
     </div>
 
+<script>
+    // --- NEW: High-Precision Timing Engine ---
+    let rafId = null; // ID for the requestAnimationFrame loop
 
-    <script>
-        // Global state management
-        let timers = [];
-        let timerIdCounter = 0;
-        let isUILocked = false;
-        let countDirection = 'down'; // 'down' or 'up'
-        let globalVolume = 0.5;
-        let currentTheme = 'light';
-        let currentBreakTimerId = null;
+    // The single, global update loop. Runs whenever at least one timer is active.
+    function mainUpdateLoop(now) {
+        let isAnyTimerRunning = false;
 
-        // Audio context for chime
-        const AudioContext = window.AudioContext || window.webkitAudioContext;
-        let audioContext = null;
-
-        // --- Modal Functions ---
-        function showAlert(title, message) {
-            document.getElementById('alertModalHeader').textContent = title;
-            document.getElementById('alertModalBody').textContent = message;
-            document.getElementById('alertModal').classList.add('active');
-        }
-
-        function closeAlertModal() {
-            document.getElementById('alertModal').classList.remove('active');
-        }
-
-        // Initialize audio context on first user interaction
-        function initAudioContext() {
-            if (!audioContext) {
-                audioContext = new AudioContext();
+        timers.forEach(timer => {
+            if (timer.isRunning || timer.onBreak) {
+                isAnyTimerRunning = true;
+                timer.update(now); // Pass the high-precision timestamp to each timer
             }
+        });
+
+        // Continue the loop if there's work to do
+        if (isAnyTimerRunning) {
+            rafId = requestAnimationFrame(mainUpdateLoop);
+        } else {
+            // Stop the loop if no timers are active
+            cancelAnimationFrame(rafId);
+            rafId = null;
+        }
+    }
+
+    // Starts the global loop if it's not already running
+    function startGlobalLoop() {
+        if (!rafId) {
+            rafId = requestAnimationFrame(mainUpdateLoop);
+        }
+    }
+
+    // Global state management
+    let timers = [];
+    let timerIdCounter = 0;
+    let isUILocked = false;
+    let countDirection = 'down'; // 'down' or 'up'
+    let globalVolume = 0.5;
+    let currentTheme = 'light';
+    let currentBreakTimerId = null;
+
+    // Audio context for chime
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    let audioContext = null;
+
+    // --- Modal Functions ---
+    function showAlert(title, message) {
+        document.getElementById('alertModalHeader').textContent = title;
+        document.getElementById('alertModalBody').textContent = message;
+        document.getElementById('alertModal').classList.add('active');
+    }
+
+    function closeAlertModal() {
+        document.getElementById('alertModal').classList.remove('active');
+    }
+
+    // Initialize audio context on first user interaction
+    function initAudioContext() {
+        if (!audioContext) {
+            audioContext = new AudioContext();
+        }
+    }
+
+    // Play chime sound
+    function playChime(volume = globalVolume) {
+        initAudioContext();
+        if (!audioContext) return;
+
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+
+        oscillator.frequency.value = 800;
+        oscillator.type = 'sine';
+
+        gainNode.gain.setValueAtTime(0, audioContext.currentTime);
+        gainNode.gain.linearRampToValueAtTime(volume, audioContext.currentTime + 0.01);
+        gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.5);
+
+        oscillator.start(audioContext.currentTime);
+        oscillator.stop(audioContext.currentTime + 0.5);
+    }
+
+    // --- RE-ARCHITECTED: Timer class ---
+    class Timer {
+        constructor(id, label = 'Timer', duration = 3600) {
+            this.id = id;
+            this.label = label;
+            this.duration = duration; // in seconds
+
+            // Core timing properties
+            this.elapsed = 0; // Total elapsed time in SECONDS
+            this.remaining = duration;
+            this.startTime = 0; // performance.now() timestamp when last started
+            this.elapsedBeforePause = 0; // Accumulated elapsed time before the current running segment
+
+            // State flags
+            this.isRunning = false;
+            this.isPaused = false;
+            this.isFinished = false;
+            this.chimeEnabled = true;
+
+            // Display optimization
+            this.lastDisplayedSeconds = -1;
+
+            // Break settings
+            this.breakCount = 3;
+            this.breakDuration = 5; // minutes
+            this.breaksUsed = [];
+            this.activeBreak = null;
+            this.onBreak = false;
         }
 
-        // Play chime sound
-        function playChime(volume = globalVolume) {
-            initAudioContext();
-            if (!audioContext) return;
+        start() {
+            if (this.isRunning || this.isFinished || this.activeBreak) return;
 
-            const oscillator = audioContext.createOscillator();
-            const gainNode = audioContext.createGain();
-
-            oscillator.connect(gainNode);
-            gainNode.connect(audioContext.destination);
-
-            oscillator.frequency.value = 800;
-            oscillator.type = 'sine';
-
-            gainNode.gain.setValueAtTime(0, audioContext.currentTime);
-            gainNode.gain.linearRampToValueAtTime(volume, audioContext.currentTime + 0.01);
-            gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.5);
-
-            oscillator.start(audioContext.currentTime);
-            oscillator.stop(audioContext.currentTime + 0.5);
+            this.isRunning = true;
+            this.isPaused = false;
+            // Store the starting point of this running segment
+            this.startTime = performance.now();
+            startGlobalLoop(); // Ensure the main loop is running
         }
 
-        // Timer class
-        class Timer {
-            constructor(id, label = 'Timer', duration = 3600) {
-                this.id = id;
-                this.label = label;
-                this.duration = duration; // in seconds
-                this.elapsed = 0;
-                this.remaining = duration;
-                this.isRunning = false;
-                this.isPaused = false;
-                this.isFinished = false;
-                this.chimeEnabled = true;
-                this.lastUpdateTime = null;
-                this.intervalId = null;
+        pause() {
+            if (!this.isRunning) return;
 
-                // Break settings
-                this.breakCount = 3;
-                this.breakDuration = 5; // minutes
-                this.breaksUsed = [];
-                this.activeBreak = null;
-                this.onBreak = false; // True only when a break is active
-            }
+            this.isRunning = false;
+            this.isPaused = true;
+            // Add the elapsed time from this segment to the total
+            this.elapsedBeforePause += (performance.now() - this.startTime) / 1000;
+            this.startTime = 0;
+        }
 
-            start() {
-                if (this.isFinished || this.activeBreak) return;
+        reset() {
+            this.pause();
+            this.elapsed = 0;
+            this.remaining = this.duration;
+            this.elapsedBeforePause = 0;
+            this.startTime = 0;
+            this.isFinished = false;
+            this.isPaused = false;
+            this.breaksUsed = [];
+            this.activeBreak = null;
+            this.onBreak = false;
+            this.lastDisplayedSeconds = -1;
+            updateTimerDisplay(this.id); // Force a visual update for the reset
+        }
 
-                this.isRunning = true;
-                this.isPaused = false;
-                this.lastUpdateTime = Date.now();
+        update(now) {
+            if (this.isFinished) return;
 
-                if (!this.intervalId) {
-                    this.intervalId = setInterval(() => this.update(), 100);
+            let currentDisplayValue;
+
+            if (this.onBreak && this.activeBreak) {
+                // --- Break Timing Logic ---
+                const breakElapsed = (now - this.activeBreak.startTime) / 1000;
+                this.activeBreak.remaining = this.activeBreak.duration - breakElapsed;
+                currentDisplayValue = this.activeBreak.remaining;
+
+                if (this.activeBreak.remaining <= 0) {
+                    this.activeBreak.remaining = 0;
+                    this.endBreak(this.activeBreak.index);
                 }
-            }
-
-            pause() {
-                this.isRunning = false;
-                this.isPaused = true;
-
-                if (this.intervalId) {
-                    clearInterval(this.intervalId);
-                    this.intervalId = null;
-                }
-            }
-
-            reset() {
-                this.pause();
-                this.elapsed = 0;
-                this.remaining = this.duration;
-                this.isFinished = false;
-                this.isPaused = false;
-                this.breaksUsed = [];
-                this.activeBreak = null;
-                this.onBreak = false;
-            }
-
-            update() {
-                if (!this.isRunning || this.isFinished) return;
-
-                const now = Date.now();
-                const delta = (now - this.lastUpdateTime) / 1000;
-                this.lastUpdateTime = now;
+            } else if (this.isRunning) {
+                // --- Main Timer Logic ---
+                this.elapsed = this.elapsedBeforePause + (now - this.startTime) / 1000;
 
                 if (countDirection === 'down') {
-                    this.remaining -= delta;
-                    this.elapsed = this.duration - this.remaining;
+                    this.remaining = this.duration - this.elapsed;
+                    currentDisplayValue = this.remaining;
                     if (this.remaining <= 0) this.finish();
                 } else {
-                    this.elapsed += delta;
-                    this.remaining = this.duration - this.elapsed;
+                    this.remaining = 0; // Not used in count up
+                    currentDisplayValue = this.elapsed;
                     if (this.elapsed >= this.duration) this.finish();
                 }
+            } else {
+                return; // Not running and not on break, nothing to do
             }
 
-            finish() {
-                this.remaining = 0;
-                this.elapsed = this.duration;
-                this.isRunning = false;
-                this.isFinished = true;
-                this.pause();
-
-                if (this.chimeEnabled) playChime();
+            // --- Performance Optimization: Only update DOM when the second changes ---
+            const newSeconds = Math.ceil(currentDisplayValue);
+            if (newSeconds !== this.lastDisplayedSeconds) {
+                this.lastDisplayedSeconds = newSeconds;
                 updateTimerDisplay(this.id);
-            }
-
-            startBreak(breakIndex) {
-                if (this.activeBreak || this.breaksUsed.includes(breakIndex)) return;
-
-                this.pause();
-                this.onBreak = true;
-
-                this.activeBreak = {
-                    index: breakIndex,
-                    duration: this.breakDuration * 60,
-                    remaining: this.breakDuration * 60,
-                    lastUpdateTime: Date.now(),
-                    intervalId: null
-                };
-
-                const breakUpdate = () => {
-                    if (!this.activeBreak) return; // Guard against race conditions
-                    const now = Date.now();
-                    const delta = (now - this.activeBreak.lastUpdateTime) / 1000;
-                    this.activeBreak.lastUpdateTime = now;
-                    this.activeBreak.remaining -= delta;
-
-                    if (this.activeBreak.remaining <= 0) {
-                        this.activeBreak.remaining = 0;
-                        this.endBreak(breakIndex);
-                    }
-                    updateTimerDisplay(this.id);
-                };
-
-                this.activeBreak.intervalId = setInterval(breakUpdate, 100);
-                updateTimerDisplay(this.id);
-            }
-
-            endBreak(breakIndex) {
-                if (!this.activeBreak || this.activeBreak.index !== breakIndex) return;
-
-                clearInterval(this.activeBreak.intervalId);
-                if (!this.breaksUsed.includes(breakIndex)) {
-                   this.breaksUsed.push(breakIndex);
-                }
-                this.activeBreak = null;
-                this.onBreak = false;
-                // --- START OF CHANGE ---
-                // Automatically resume the main timer instead of just pausing.
-                this.start();
-                // --- END OF CHANGE ---
-                updateTimerDisplay(this.id);
-            }
-
-            cancelBreak() {
-                if (!this.activeBreak) return;
-                const breakIndex = this.activeBreak.index;
-                this.endBreak(breakIndex);
             }
         }
 
-        // Generate break buttons HTML
-        function generateBreakButtons(timer) {
-            if (timer.breakCount === 0) return '';
-            let html = '';
-            for (let i = 0; i < timer.breakCount; i++) {
-                const isUsed = timer.breaksUsed.includes(i);
-                const isActive = timer.activeBreak && timer.activeBreak.index === i;
-                const isDisabled = timer.isFinished || (timer.activeBreak && !isActive);
+        finish() {
+            this.pause();
+            this.remaining = 0;
+            this.elapsed = this.duration;
+            this.isFinished = true;
 
-                if (isActive) {
-                    const remaining = Math.ceil(timer.activeBreak.remaining);
-                    const minutes = Math.floor(remaining / 60);
-                    const seconds = remaining % 60;
-                    html += `<button class="break-btn active" id="break-btn-${timer.id}-${i}" onclick="cancelBreak(${timer.id})"><span>${minutes}m ${seconds}s</span></button>`;
-                } else if (isUsed) {
-                    html += `<button class="break-btn" disabled><span>Break Used</span></button>`;
-                } else {
-                    html += `<button class="break-btn" onclick="startBreak(${timer.id}, ${i})" ${isDisabled ? 'disabled' : ''}><span>${timer.breakDuration} min Break</span></button>`;
-                }
-            }
-            return html;
+            if (this.chimeEnabled) playChime();
+            updateTimerDisplay(this.id);
         }
 
-        // Create timer card HTML
-        function createTimerCard(timer, isCompact = false) {
-            const card = document.createElement('div');
-            card.className = 'timer-card';
-            if (isCompact) card.classList.add('compact');
-            card.id = `timer-${timer.id}`;
+        startBreak(breakIndex) {
+            if (this.activeBreak || this.breaksUsed.includes(breakIndex)) return;
 
-            const timeAndProgressHTML = isCompact ? `
-                <div class="timer-and-progress">
-                    <div class="timer-display" onclick="editTime(${timer.id})" id="display-${timer.id}"></div>
-                    <div class="progress-container">
-                        <div class="progress-bar"><div class="progress-fill" id="progress-${timer.id}"></div></div>
-                        <span class="duration-label">${formatTime(timer.duration)}</span>
-                    </div>
-                </div>
-            ` : `
+            this.pause(); // Pause the main timer
+            this.onBreak = true;
+
+            this.activeBreak = {
+                index: breakIndex,
+                duration: this.breakDuration * 60,
+                remaining: this.breakDuration * 60,
+                startTime: performance.now()
+            };
+
+            this.lastDisplayedSeconds = -1; // Reset display cache
+            startGlobalLoop(); // Ensure main loop is running for the break
+            updateTimerDisplay(this.id);
+        }
+
+        endBreak(breakIndex) {
+            if (!this.activeBreak || this.activeBreak.index !== breakIndex) return;
+
+            if (!this.breaksUsed.includes(breakIndex)) {
+               this.breaksUsed.push(breakIndex);
+            }
+            this.activeBreak = null;
+            this.onBreak = false;
+            this.lastDisplayedSeconds = -1; // Reset display cache
+            this.start(); // Automatically resume the main timer
+            updateTimerDisplay(this.id);
+        }
+
+        cancelBreak() {
+            if (!this.activeBreak) return;
+            const breakIndex = this.activeBreak.index;
+            // Mark as used when cancelled
+            if (!this.breaksUsed.includes(breakIndex)) {
+               this.breaksUsed.push(breakIndex);
+            }
+            this.activeBreak = null;
+            this.onBreak = false;
+            this.lastDisplayedSeconds = -1;
+            this.start(); // Resume main timer
+            updateTimerDisplay(this.id);
+        }
+    }
+
+    // Generate break buttons HTML
+    function generateBreakButtons(timer) {
+        if (timer.breakCount === 0) return '';
+        let html = '';
+        for (let i = 0; i < timer.breakCount; i++) {
+            const isUsed = timer.breaksUsed.includes(i);
+            const isActive = timer.activeBreak && timer.activeBreak.index === i;
+            const isDisabled = timer.isFinished || (timer.activeBreak && !isActive);
+
+            if (isActive) {
+                const remaining = Math.ceil(timer.activeBreak.remaining);
+                const minutes = Math.floor(remaining / 60);
+                const seconds = remaining % 60;
+                html += `<button class="break-btn active" id="break-btn-${timer.id}-${i}" onclick="cancelBreak(${timer.id})"><span>${minutes}m ${seconds}s</span></button>`;
+            } else if (isUsed) {
+                html += `<button class="break-btn" disabled><span>Break Used</span></button>`;
+            } else {
+                html += `<button class="break-btn" onclick="startBreak(${timer.id}, ${i})" ${isDisabled ? 'disabled' : ''}><span>${timer.breakDuration} min Break</span></button>`;
+            }
+        }
+        return html;
+    }
+
+    // Create timer card HTML
+    function createTimerCard(timer, isCompact = false) {
+        const card = document.createElement('div');
+        card.className = 'timer-card';
+        if (isCompact) card.classList.add('compact');
+        card.id = `timer-${timer.id}`;
+
+        const timeAndProgressHTML = isCompact ? `
+            <div class="timer-and-progress">
                 <div class="timer-display" onclick="editTime(${timer.id})" id="display-${timer.id}"></div>
                 <div class="progress-container">
                     <div class="progress-bar"><div class="progress-fill" id="progress-${timer.id}"></div></div>
                     <span class="duration-label">${formatTime(timer.duration)}</span>
                 </div>
-            `;
+            </div>
+        ` : `
+            <div class="timer-display" onclick="editTime(${timer.id})" id="display-${timer.id}"></div>
+            <div class="progress-container">
+                <div class="progress-bar"><div class="progress-fill" id="progress-${timer.id}"></div></div>
+                <span class="duration-label">${formatTime(timer.duration)}</span>
+            </div>
+        `;
 
-            card.innerHTML = `
-                <div class="timer-header">
-                    <div class="timer-label" onclick="editLabel(${timer.id})" id="label-${timer.id}">${timer.label}</div>
-                    <button class="icon-button danger" onclick="removeTimer(${timer.id})">×</button>
+        card.innerHTML = `
+            <div class="timer-header">
+                <div class="timer-label" onclick="editLabel(${timer.id})" id="label-${timer.id}">${timer.label}</div>
+                <button class="icon-button danger" onclick="removeTimer(${timer.id})">×</button>
+            </div>
+            ${timeAndProgressHTML}
+            <div class="timer-controls" id="controls-${timer.id}">
+                <div class="timer-controls-left">
+                    <button id="start-${timer.id}" onclick="toggleTimer(${timer.id})"></button>
+                    <button id="reset-${timer.id}" onclick="resetTimer(${timer.id})">Reset</button>
+                    <button class="icon-button ${timer.chimeEnabled ? '' : 'secondary'}" onclick="toggleChime(${timer.id})">🔔</button>
                 </div>
-                ${timeAndProgressHTML}
-                <div class="timer-controls" id="controls-${timer.id}">
-                    <div class="timer-controls-left">
-                        <button id="start-${timer.id}" onclick="toggleTimer(${timer.id})"></button>
-                        <button id="reset-${timer.id}" onclick="resetTimer(${timer.id})">Reset</button>
-                        <button class="icon-button ${timer.chimeEnabled ? '' : 'secondary'}" onclick="toggleChime(${timer.id})">🔔</button>
-                    </div>
-                     <div class="timer-controls-right">
-                        <button class="secondary" onclick="openBreakModal(${timer.id})">Edit Breaks</button>
-                        ${generateBreakButtons(timer)}
-                    </div>
+                 <div class="timer-controls-right">
+                    <button class="secondary" onclick="openBreakModal(${timer.id})">Edit Breaks</button>
+                    ${generateBreakButtons(timer)}
                 </div>
-            `;
-            return card;
+            </div>
+        `;
+        return card;
+    }
+
+    // Format time display
+    function formatTime(seconds) {
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = Math.floor(seconds % 60);
+
+        if (hours > 0) {
+            return `${hours}h ${String(minutes).padStart(2, '0')}m ${String(secs).padStart(2, '0')}s`;
+        }
+        return minutes > 0 ? `${minutes}m ${String(secs).padStart(2, '0')}s` : `${secs}s`;
+    }
+
+    // Get progress percentage
+    function getProgress(timer) {
+        if (timer.duration === 0) return 0;
+        const progress = (timer.elapsed / timer.duration) * 100;
+        return Math.max(0, Math.min(100, progress));
+    }
+
+    // Update timer display (now just renders state, doesn't calculate it)
+    function updateTimerDisplay(timerId) {
+        const timer = timers.find(t => t.id === timerId);
+        if (!timer) return;
+        const card = document.getElementById(`timer-${timerId}`);
+        if (!card) return;
+
+        card.className = 'timer-card';
+        if (timers.length > 4) card.classList.add('compact');
+        if (timer.isFinished) card.classList.add('finished');
+        else if (timer.onBreak) card.classList.add('on-break');
+        else if (timer.isPaused) card.classList.add('paused');
+
+        const display = document.getElementById(`display-${timerId}`);
+        if (timer.isFinished) {
+            display.innerHTML = "Time's Up!";
+            display.classList.add('finished');
+            display.classList.remove('running');
+        } else if (timer.onBreak && timer.activeBreak) {
+            display.innerHTML = formatTime(timer.activeBreak.remaining);
+            display.classList.remove('finished');
+            display.classList.add('running'); // Visually indicate break is active
+        } else {
+            display.innerHTML = formatTime(countDirection === 'down' ? timer.remaining : timer.elapsed);
+            display.classList.remove('finished');
+            display.classList.toggle('running', timer.isRunning);
+        }
+        display.style.pointerEvents = (timer.isRunning || isUILocked || timer.activeBreak) ? 'none' : 'auto';
+
+        document.getElementById(`progress-${timerId}`).style.width = `${getProgress(timer)}%`;
+
+        const startBtn = document.getElementById(`start-${timerId}`);
+        if (timer.isRunning) startBtn.textContent = 'Pause';
+        else if (timer.isPaused) startBtn.textContent = 'Resume';
+        else startBtn.textContent = 'Start';
+        startBtn.disabled = timer.isFinished || !!timer.activeBreak;
+
+        const controlsRightContainer = card.querySelector('.timer-controls-right');
+        const newBreakButtonsHTML = `<button class="secondary" onclick="openBreakModal(${timer.id})">Edit Breaks</button>${generateBreakButtons(timer)}`;
+        if (controlsRightContainer.innerHTML !== newBreakButtonsHTML) {
+            controlsRightContainer.innerHTML = newBreakButtonsHTML;
         }
 
-        // Format time display
-        function formatTime(seconds) {
-            const hours = Math.floor(seconds / 3600);
-            const minutes = Math.floor((seconds % 3600) / 60);
-            const secs = Math.floor(seconds % 60);
+        const chimeBtn = card.querySelector('button[onclick*="toggleChime"]');
+        chimeBtn.classList.toggle('secondary', !timer.chimeEnabled);
+    }
 
-            if (hours > 0) {
-                return `${hours}h ${String(minutes).padStart(2, '0')}m ${String(secs).padStart(2, '0')}s`;
-            }
-            return minutes > 0 ? `${minutes}m ${String(secs).padStart(2, '0')}s` : `${secs}s`;
-        }
+    // Timer management functions
+    function addTimer() {
+        if (isUILocked) return;
+        const id = timerIdCounter++;
+        timers.push(new Timer(id, `Timer ${id + 1}`, 3600));
+        renderTimers();
+        saveState();
+    }
 
-        // Get progress percentage
-        function getProgress(timer) {
-            if (timer.duration === 0) return 0;
-            const progress = countDirection === 'down' ?
-                ((timer.duration - timer.remaining) / timer.duration) * 100 :
-                (timer.elapsed / timer.duration) * 100;
-            return Math.max(0, Math.min(100, progress));
-        }
+    function removeTimer(timerId) {
+        if (isUILocked) return;
+        const timer = timers.find(t => t.id === timerId);
+        if (timer) timer.pause();
+        timers = timers.filter(t => t.id !== timerId);
+        renderTimers();
+        saveState();
+    }
 
-        // Update timer display
-        function updateTimerDisplay(timerId) {
-            const timer = timers.find(t => t.id === timerId);
-            if (!timer) return;
-            const card = document.getElementById(`timer-${timerId}`);
-            if (!card) return;
+    function removeAllTimers() {
+        if (isUILocked) return;
+        timers.forEach(timer => timer.pause());
+        timers = [];
+        renderTimers();
+        saveState();
+    }
 
-            card.className = 'timer-card';
-            if (timers.length > 4) card.classList.add('compact');
-            if (timer.isFinished) card.classList.add('finished');
-            else if (timer.onBreak) card.classList.add('on-break');
-            else if (timer.isPaused) card.classList.add('paused');
+    function toggleTimer(timerId) {
+        const timer = timers.find(t => t.id === timerId);
+        if (!timer || timer.isFinished || timer.activeBreak) return;
+        timer.isRunning ? timer.pause() : timer.start();
+        updateTimerDisplay(timerId);
+        saveState();
+    }
 
-            const display = document.getElementById(`display-${timerId}`);
-            if (timer.isFinished) {
-                display.innerHTML = "Time's Up!";
-                display.classList.add('finished');
-                display.classList.remove('running');
-            } else {
-                display.innerHTML = formatTime(countDirection === 'down' ? timer.remaining : timer.elapsed);
-                display.classList.remove('finished');
-                display.classList.toggle('running', timer.isRunning);
-            }
-            display.style.pointerEvents = (timer.isRunning || isUILocked || timer.activeBreak) ? 'none' : 'auto';
-
-            document.getElementById(`progress-${timerId}`).style.width = `${getProgress(timer)}%`;
-
-            const startBtn = document.getElementById(`start-${timerId}`);
-            if (timer.isRunning) startBtn.textContent = 'Pause';
-            else if (timer.isPaused) startBtn.textContent = 'Resume';
-            else startBtn.textContent = 'Start';
-            startBtn.disabled = timer.isFinished || !!timer.activeBreak;
-
-            const controlsRightContainer = card.querySelector('.timer-controls-right');
-            if (controlsRightContainer) {
-                if (timer.activeBreak) {
-                    // A break is currently active. Efficiently update its countdown.
-                    const breakIndex = timer.activeBreak.index;
-                    const activeBtn = document.getElementById(`break-btn-${timer.id}-${breakIndex}`);
-
-                    const remaining = Math.ceil(timer.activeBreak.remaining);
-                    const minutes = Math.floor(remaining / 60);
-                    const seconds = remaining % 60;
-                    const newText = `${minutes}m ${seconds}s`;
-
-                    if (activeBtn && activeBtn.classList.contains('active')) {
-                        const span = activeBtn.querySelector('span');
-                        if (span && span.textContent !== newText) {
-                            span.textContent = newText;
-                        }
-                    } else {
-                        // This handles the very first frame when a break starts.
-                        // A full re-render is necessary here to add the 'active' class etc.
-                        const newHTML = `<button class="secondary" onclick="openBreakModal(${timer.id})">Edit Breaks</button>${generateBreakButtons(timer)}`;
-                        controlsRightContainer.innerHTML = newHTML;
-                    }
-                } else {
-                    // No break is active.
-                    // We only need to re-render the controls if the UI is out of sync
-                    // (e.g., a break just ended, and the UI still shows an active button).
-                    const hasActiveButton = controlsRightContainer.querySelector('.break-btn.active');
-                    if (hasActiveButton) {
-                        const newHTML = `<button class="secondary" onclick="openBreakModal(${timer.id})">Edit Breaks</button>${generateBreakButtons(timer)}`;
-                        controlsRightContainer.innerHTML = newHTML;
-                    }
-                }
-            }
-
-            const chimeBtn = card.querySelector('button[onclick*="toggleChime"]');
-            chimeBtn.classList.toggle('secondary', !timer.chimeEnabled);
-        }
-
-        // Timer management functions
-        function addTimer() {
-            if (isUILocked) return;
-            const id = timerIdCounter++;
-            timers.push(new Timer(id, `Timer ${id + 1}`, 3600));
-            renderTimers();
-            saveState();
-        }
-
-        function removeTimer(timerId) {
-            if (isUILocked) return;
-            const timer = timers.find(t => t.id === timerId);
-            if (timer) timer.pause();
-            timers = timers.filter(t => t.id !== timerId);
-            renderTimers();
-            saveState();
-        }
-
-        function removeAllTimers() {
-            if (isUILocked) return;
-            timers.forEach(timer => timer.pause());
-            timers = [];
-            renderTimers();
-            saveState();
-        }
-
-        function toggleTimer(timerId) {
-            const timer = timers.find(t => t.id === timerId);
-            if (!timer || timer.isFinished || timer.activeBreak) return;
-            timer.isRunning ? timer.pause() : timer.start();
-            updateTimerDisplay(timerId);
-            saveState();
-        }
-
-        function resetTimer(timerId) {
-            if (isUILocked) return;
-            const timer = timers.find(t => t.id === timerId);
-            if (timer) {
-                timer.reset();
-                updateTimerDisplay(timerId);
-                saveState();
-            }
-        }
-
-        function toggleChime(timerId) {
-            const timer = timers.find(t => t.id === timerId);
-            if (timer) {
-                timer.chimeEnabled = !timer.chimeEnabled;
-                updateTimerDisplay(timer.id);
-                saveState();
-            }
-        }
-
-        // Break management
-        function openBreakModal(timerId) {
-            if (isUILocked) return;
-            currentBreakTimerId = timerId;
-            const timer = timers.find(t => t.id === timerId);
-            if (timer) {
-                document.getElementById('breakCount').value = timer.breakCount;
-                document.getElementById('breakDuration').value = timer.breakDuration;
-            }
-            document.getElementById('breakModal').classList.add('active');
-        }
-
-        function closeBreakModal() {
-            document.getElementById('breakModal').classList.remove('active');
-            currentBreakTimerId = null;
-        }
-
-        function saveBreakSettings() {
-            const timer = timers.find(t => t.id === currentBreakTimerId);
-            if (timer) {
-                timer.breakCount = parseInt(document.getElementById('breakCount').value);
-                timer.breakDuration = parseInt(document.getElementById('breakDuration').value);
-                if (!timer.activeBreak) timer.breaksUsed = [];
-                // Force a re-render of the buttons after saving
-                const card = document.getElementById(`timer-${timer.id}`);
-                const controlsRightContainer = card.querySelector('.timer-controls-right');
-                const newHTML = `<button class="secondary" onclick="openBreakModal(${timer.id})">Edit Breaks</button>${generateBreakButtons(timer)}`;
-                controlsRightContainer.innerHTML = newHTML;
-                updateTimerDisplay(currentBreakTimerId);
-                saveState();
-            }
-            closeBreakModal();
-        }
-
-        function startBreak(timerId, breakIndex) {
-            const timer = timers.find(t => t.id === timerId);
-            if (timer) {
-                timer.startBreak(breakIndex);
-                saveState();
-            }
-        }
-
-        function cancelBreak(timerId) {
-            const timer = timers.find(t => t.id === timerId);
-            if (timer) {
-                timer.cancelBreak();
-                saveState();
-            }
-        }
-
-        // Label and time editing
-        function editLabel(timerId) {
-            if (isUILocked) return;
-            const labelElement = document.getElementById(`label-${timerId}`);
-            const timer = timers.find(t => t.id === timerId);
-            if (!timer || labelElement.querySelector('input')) return;
-
-            const input = document.createElement('input');
-            input.type = 'text';
-            input.value = timer.label;
-            const save = () => {
-                timer.label = input.value.trim() || `Timer ${timerId + 1}`;
-                labelElement.innerHTML = timer.label;
-                saveState();
-            };
-            input.onblur = save;
-            input.onkeydown = (e) => {
-                if (e.key === 'Enter') input.blur();
-                else if (e.key === 'Escape') labelElement.innerHTML = timer.label;
-            };
-
-            labelElement.innerHTML = '';
-            labelElement.appendChild(input);
-            input.focus();
-            input.select();
-        }
-
-        function editTime(timerId) {
-            if (isUILocked) return;
-            const timer = timers.find(t => t.id === timerId);
-            if (!timer || timer.isFinished || timer.isRunning || timer.activeBreak) return;
-
-            const currentHours = Math.floor(timer.duration / 3600);
-            const currentMinutes = Math.floor((timer.duration % 3600) / 60);
-            const defaultValue = String(currentHours).padStart(2, '0') + String(currentMinutes).padStart(2, '0');
-
-            const input = prompt('Enter time in HHMM format (e.g., 0245 for 2h 45m):', defaultValue);
-            if (!input || !/^\d{4}$/.test(input)) return;
-
-            const hours = parseInt(input.substr(0, 2));
-            const minutes = parseInt(input.substr(2, 2));
-
-            if (hours > 23 || minutes > 59) {
-                showAlert('Invalid Time', 'Invalid time format. Hours must be 0-23, minutes must be 0-59.');
-                return;
-            }
-            timer.duration = (hours * 3600) + (minutes * 60);
+    function resetTimer(timerId) {
+        if (isUILocked) return;
+        const timer = timers.find(t => t.id === timerId);
+        if (timer) {
             timer.reset();
-            updateTimerDisplay(timerId);
             saveState();
         }
+    }
 
-        // Global controls
-        function startAllTimers() {
-            timers.forEach(timer => timer.start());
+    function toggleChime(timerId) {
+        const timer = timers.find(t => t.id === timerId);
+        if (timer) {
+            timer.chimeEnabled = !timer.chimeEnabled;
+            updateTimerDisplay(timer.id);
             saveState();
         }
+    }
 
-        function pauseAllTimers() {
-            timers.forEach(timer => timer.pause());
+    // Break management
+    function openBreakModal(timerId) {
+        if (isUILocked) return;
+        currentBreakTimerId = timerId;
+        const timer = timers.find(t => t.id === timerId);
+        if (timer) {
+            document.getElementById('breakCount').value = timer.breakCount;
+            document.getElementById('breakDuration').value = timer.breakDuration;
+        }
+        document.getElementById('breakModal').classList.add('active');
+    }
+
+    function closeBreakModal() {
+        document.getElementById('breakModal').classList.remove('active');
+        currentBreakTimerId = null;
+    }
+
+    function saveBreakSettings() {
+        const timer = timers.find(t => t.id === currentBreakTimerId);
+        if (timer) {
+            timer.breakCount = parseInt(document.getElementById('breakCount').value);
+            timer.breakDuration = parseInt(document.getElementById('breakDuration').value);
+            if (!timer.activeBreak) timer.breaksUsed = [];
+            updateTimerDisplay(currentBreakTimerId);
             saveState();
         }
+        closeBreakModal();
+    }
 
-        function resetAllTimers() {
-            if (isUILocked) return;
-            timers.forEach(timer => {
-                timer.reset();
-                updateTimerDisplay(timer.id);
-            });
+    function startBreak(timerId, breakIndex) {
+        const timer = timers.find(t => t.id === timerId);
+        if (timer) {
+            timer.startBreak(breakIndex);
             saveState();
         }
+    }
 
-        function toggleDirection() {
-            countDirection = countDirection === 'down' ? 'up' : 'down';
-            document.getElementById('directionToggle').classList.toggle('active');
-            document.getElementById('directionLabel').textContent = countDirection === 'down' ? 'Count Down' : 'Count Up';
-            timers.forEach(timer => updateTimerDisplay(timer.id));
+    function cancelBreak(timerId) {
+        const timer = timers.find(t => t.id === timerId);
+        if (timer) {
+            timer.cancelBreak();
             saveState();
         }
+    }
 
-        function updateVolume(value) {
-            globalVolume = value / 100;
-            document.getElementById('volumeLabel').textContent = `${value}%`;
-            playChime(globalVolume * 0.3);
+    // Label and time editing
+    function editLabel(timerId) {
+        if (isUILocked) return;
+        const labelElement = document.getElementById(`label-${timerId}`);
+        const timer = timers.find(t => t.id === timerId);
+        if (!timer || labelElement.querySelector('input')) return;
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = timer.label;
+        const save = () => {
+            timer.label = input.value.trim() || `Timer ${timerId + 1}`;
+            labelElement.innerHTML = timer.label;
             saveState();
-        }
+        };
+        input.onblur = save;
+        input.onkeydown = (e) => {
+            if (e.key === 'Enter') input.blur();
+            else if (e.key === 'Escape') labelElement.innerHTML = timer.label;
+        };
 
-        function toggleUILock() {
-            isUILocked = !isUILocked;
-            const lockBtn = document.getElementById('lockBtn');
-            lockBtn.textContent = isUILocked ? '🔒 Locked' : '🔓 Unlocked';
-            lockBtn.classList.toggle('warning', isUILocked);
-            document.getElementById('addTimerBtn').disabled = isUILocked;
-            document.getElementById('removeAllBtn').disabled = isUILocked;
-            document.getElementById('resetAllBtn').disabled = isUILocked;
-            renderTimers();
-            saveState();
-        }
+        labelElement.innerHTML = '';
+        labelElement.appendChild(input);
+        input.focus();
+        input.select();
+    }
 
-        function toggleTheme() {
-            currentTheme = currentTheme === 'light' ? 'dark' : 'light';
-            document.body.setAttribute('data-theme', currentTheme);
-            document.getElementById('themeToggle').classList.toggle('active');
-            saveState();
-        }
+    function editTime(timerId) {
+        if (isUILocked) return;
+        const timer = timers.find(t => t.id === timerId);
+        if (!timer || timer.isFinished || timer.isRunning || timer.activeBreak) return;
 
-        // Render all timers
-        function renderTimers() {
-            const container = document.getElementById('timerContainer');
-            container.innerHTML = '';
-            if (timers.length === 0) {
-                container.className = 'timer-grid';
-                container.innerHTML = `<div class="empty-state"><h2>No timers yet</h2><p>Click "Add Timer" to get started</p></div>`;
-                return;
+        const currentHours = Math.floor(timer.duration / 3600);
+        const currentMinutes = Math.floor((timer.duration % 3600) / 60);
+        const defaultValue = String(currentHours).padStart(2, '0') + String(currentMinutes).padStart(2, '0');
+
+        const input = prompt('Enter time in HHMM format (e.g., 0245 for 2h 45m):', defaultValue);
+        if (!input || !/^\d{4}$/.test(input)) return;
+
+        const hours = parseInt(input.substr(0, 2));
+        const minutes = parseInt(input.substr(2, 2));
+
+        if (hours > 23 || minutes > 59) {
+            showAlert('Invalid Time', 'Invalid time format. Hours must be 0-23, minutes must be 0-59.');
+            return;
+        }
+        timer.duration = (hours * 3600) + (minutes * 60);
+        timer.reset();
+        saveState();
+    }
+
+    // Global controls
+    function startAllTimers() {
+        timers.forEach(timer => timer.start());
+        saveState();
+    }
+
+    function pauseAllTimers() {
+        timers.forEach(timer => timer.pause());
+        saveState();
+    }
+
+    function resetAllTimers() {
+        if (isUILocked) return;
+        timers.forEach(timer => timer.reset());
+        saveState();
+    }
+
+    function toggleDirection() {
+        countDirection = countDirection === 'down' ? 'up' : 'down';
+        document.getElementById('directionToggle').classList.toggle('active');
+        document.getElementById('directionLabel').textContent = countDirection === 'down' ? 'Count Down' : 'Count Up';
+        timers.forEach(timer => updateTimerDisplay(timer.id));
+        saveState();
+    }
+
+    function updateVolume(value) {
+        globalVolume = value / 100;
+        document.getElementById('volumeLabel').textContent = `${value}%`;
+        playChime(globalVolume * 0.3);
+        saveState();
+    }
+
+    function toggleUILock() {
+        isUILocked = !isUILocked;
+        const lockBtn = document.getElementById('lockBtn');
+        lockBtn.textContent = isUILocked ? '🔒 Locked' : '🔓 Unlocked';
+        lockBtn.classList.toggle('warning', isUILocked);
+        document.getElementById('addTimerBtn').disabled = isUILocked;
+        document.getElementById('removeAllBtn').disabled = isUILocked;
+        document.getElementById('resetAllBtn').disabled = isUILocked;
+        renderTimers();
+        saveState();
+    }
+
+    function toggleTheme() {
+        currentTheme = currentTheme === 'light' ? 'dark' : 'light';
+        document.body.setAttribute('data-theme', currentTheme);
+        document.getElementById('themeToggle').classList.toggle('active');
+        saveState();
+    }
+
+    // Render all timers
+    function renderTimers() {
+        const container = document.getElementById('timerContainer');
+        container.innerHTML = '';
+        if (timers.length === 0) {
+            container.className = 'timer-grid';
+            container.innerHTML = `<div class="empty-state"><h2>No timers yet</h2><p>Click "Add Timer" to get started</p></div>`;
+            return;
+        }
+        container.className = timers.length === 1 ? 'timer-grid single' : 'timer-grid multiple';
+        const isCompact = timers.length > 4;
+        timers.forEach(timer => {
+            const card = createTimerCard(timer, isCompact);
+            container.appendChild(card);
+            updateTimerDisplay(timer.id);
+
+            if (isUILocked) {
+                card.querySelector('button.danger').disabled = true;
+                card.querySelector('button[onclick*="openBreakModal"]').disabled = true;
+                card.querySelector('#reset-' + timer.id).disabled = true;
+                card.querySelector('.timer-label').style.pointerEvents = 'none';
             }
-            container.className = timers.length === 1 ? 'timer-grid single' : 'timer-grid multiple';
-            const isCompact = timers.length > 4;
-            timers.forEach(timer => {
-                const card = createTimerCard(timer, isCompact);
-                container.appendChild(card);
-                updateTimerDisplay(timer.id);
-
-                if (isUILocked) {
-                    card.querySelector('button.danger').disabled = true;
-                    card.querySelector('button[onclick*="openBreakModal"]').disabled = true;
-                    card.querySelector('#reset-' + timer.id).disabled = true;
-                    card.querySelector('.timer-label').style.pointerEvents = 'none';
-                }
-            });
-        }
-
-        // State persistence
-        function saveState() {
-            const state = {
-                timers: timers.map(t => ({
-                    id: t.id, label: t.label, duration: t.duration, elapsed: t.elapsed, remaining: t.remaining,
-                    isPaused: t.isPaused, isFinished: t.isFinished, chimeEnabled: t.chimeEnabled, breakCount: t.breakCount,
-                    breakDuration: t.breakDuration, breaksUsed: t.breaksUsed, onBreak: false // Don't save active break state
-                })),
-                timerIdCounter, isUILocked, countDirection, globalVolume, currentTheme
-            };
-            localStorage.setItem('examTimerState', JSON.stringify(state));
-        }
-
-        function loadState() {
-            const savedState = localStorage.getItem('examTimerState');
-            if (!savedState) return;
-            try {
-                const state = JSON.parse(savedState);
-                timerIdCounter = state.timerIdCounter || 0;
-                isUILocked = state.isUILocked || false;
-                countDirection = state.countDirection || 'down';
-                globalVolume = state.globalVolume || 0.5;
-                currentTheme = state.currentTheme || 'light';
-                timers = state.timers.map(t_state => {
-                    const timer = new Timer(t_state.id, t_state.label, t_state.duration);
-                    Object.assign(timer, t_state);
-                    timer.isRunning = false;
-                    return timer;
-                });
-                document.body.setAttribute('data-theme', currentTheme);
-                document.getElementById('themeToggle').classList.toggle('active', currentTheme === 'dark');
-                document.getElementById('directionToggle').classList.toggle('active', countDirection === 'up');
-                document.getElementById('directionLabel').textContent = countDirection === 'down' ? 'Count Down' : 'Count Up';
-                document.getElementById('volumeSlider').value = globalVolume * 100;
-                document.getElementById('volumeLabel').textContent = `${Math.round(globalVolume * 100)}%`;
-                if (isUILocked) {
-                    isUILocked = false; // Set to inverse so toggle sets it correctly
-                    toggleUILock();
-                } else {
-                    renderTimers();
-                }
-            } catch (e) { console.error('Failed to load state:', e); }
-        }
-
-        // Update all timer displays periodically
-        function updateAllDisplays() {
-            timers.forEach(timer => {
-                if (timer.isRunning || timer.activeBreak) updateTimerDisplay(timer.id);
-            });
-        }
-
-        // Initialize on load
-        window.addEventListener('load', () => {
-            loadState();
-            setInterval(updateAllDisplays, 1000); // Changed from 250ms to 1000ms for smoother display
-            document.addEventListener('click', initAudioContext, { once: true });
         });
+    }
 
-        window.addEventListener('beforeunload', saveState);
-    </script>
+    // State persistence
+    function saveState() {
+        const state = {
+            timers: timers.map(t => ({
+                id: t.id, label: t.label, duration: t.duration,
+                elapsed: t.elapsed, // Save elapsed time directly
+                isPaused: t.isPaused, isFinished: t.isFinished, chimeEnabled: t.chimeEnabled,
+                breakCount: t.breakCount, breakDuration: t.breakDuration, breaksUsed: t.breaksUsed
+            })),
+            timerIdCounter, isUILocked, countDirection, globalVolume, currentTheme
+        };
+        localStorage.setItem('examTimerState', JSON.stringify(state));
+    }
+
+    function loadState() {
+        const savedState = localStorage.getItem('examTimerState');
+        if (!savedState) return;
+        try {
+            const state = JSON.parse(savedState);
+            timerIdCounter = state.timerIdCounter || 0;
+            isUILocked = state.isUILocked || false;
+            countDirection = state.countDirection || 'down';
+            globalVolume = state.globalVolume || 0.5;
+            currentTheme = state.currentTheme || 'light';
+            timers = state.timers.map(t_state => {
+                const timer = new Timer(t_state.id, t_state.label, t_state.duration);
+                // Restore state
+                timer.elapsed = t_state.elapsed || 0;
+                timer.elapsedBeforePause = timer.elapsed; // Set the paused state correctly
+                timer.remaining = timer.duration - timer.elapsed;
+                timer.isPaused = true; // Always load in a paused state
+                timer.isFinished = t_state.isFinished || false;
+                timer.chimeEnabled = t_state.chimeEnabled;
+                timer.breakCount = t_state.breakCount;
+                timer.breakDuration = t_state.breakDuration;
+                timer.breaksUsed = t_state.breaksUsed || [];
+                return timer;
+            });
+            document.body.setAttribute('data-theme', currentTheme);
+            document.getElementById('themeToggle').classList.toggle('active', currentTheme === 'dark');
+            document.getElementById('directionToggle').classList.toggle('active', countDirection === 'up');
+            document.getElementById('directionLabel').textContent = countDirection === 'down' ? 'Count Down' : 'Count Up';
+            document.getElementById('volumeSlider').value = globalVolume * 100;
+            document.getElementById('volumeLabel').textContent = `${Math.round(globalVolume * 100)}%`;
+            if (isUILocked) {
+                isUILocked = false; // Set to inverse so toggle sets it correctly
+                toggleUILock();
+            } else {
+                renderTimers();
+            }
+        } catch (e) { console.error('Failed to load state:', e); }
+    }
+
+    // Initialize on load
+    window.addEventListener('load', () => {
+        loadState();
+        document.addEventListener('click', initAudioContext, { once: true });
+    });
+
+    window.addEventListener('beforeunload', saveState);
+</script>
+
 </body>
 </html>

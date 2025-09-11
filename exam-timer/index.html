@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Exam Timer Manager v4.0</title>
+    <title>Exam Timer Manager v3.0</title>
     <style>
         /* CSS Variables for theming */
         :root {
@@ -206,7 +206,6 @@
             background: var(--border-color);
             outline: none;
             -webkit-appearance: none;
-            appearance: none;
         }
 
         input[type="range"]::-webkit-slider-thumb {
@@ -289,7 +288,7 @@
             font-size: 1.15rem;
             font-weight: 600;
             cursor: pointer;
-            padding: 0.2rem 0 0 0;
+            padding: 0.25rem 0.5rem;
             border-radius: 2px;
             transition: background-color 0.2s;
             position: relative;
@@ -352,9 +351,9 @@
         }
 
         .timer-display.finished {
-            color: var(--text-primary);
+            color: var(--danger-color);
             cursor: default;
-            font-size: 1rem;
+            font-size: 3rem;
         }
 
         /* Progress bar */
@@ -362,7 +361,7 @@
             width: 100%;
             height: 20px;
             background-color: var(--border-color);
-            border-radius: 3px;
+            border-radius: 4px;
             overflow: hidden;
             position: relative;
         }
@@ -617,37 +616,6 @@
     </div>
 
 <script>
-    // --- NEW: High-Precision Timing Engine ---
-    let rafId = null; // ID for the requestAnimationFrame loop
-
-    // The single, global update loop. Runs whenever at least one timer is active.
-    function mainUpdateLoop(now) {
-        let isAnyTimerRunning = false;
-
-        timers.forEach(timer => {
-            if (timer.isRunning || timer.onBreak) {
-                isAnyTimerRunning = true;
-                timer.update(now); // Pass the high-precision timestamp to each timer
-            }
-        });
-
-        // Continue the loop if there's work to do
-        if (isAnyTimerRunning) {
-            rafId = requestAnimationFrame(mainUpdateLoop);
-        } else {
-            // Stop the loop if no timers are active
-            cancelAnimationFrame(rafId);
-            rafId = null;
-        }
-    }
-
-    // Starts the global loop if it's not already running
-    function startGlobalLoop() {
-        if (!rafId) {
-            rafId = requestAnimationFrame(mainUpdateLoop);
-        }
-    }
-
     // Global state management
     let timers = [];
     let timerIdCounter = 0;
@@ -701,27 +669,22 @@
         oscillator.stop(audioContext.currentTime + 0.5);
     }
 
-    // --- RE-ARCHITECTED: Timer class ---
+    // --- REFACTORED TIMER CLASS ---
+    // The class is now much simpler. It no longer manages intervals.
+    // It only manages its own state (running, paused, finished, etc.).
     class Timer {
         constructor(id, label = 'Timer', duration = 3600) {
             this.id = id;
             this.label = label;
             this.duration = duration; // in seconds
-
-            // Core timing properties
-            this.elapsed = 0; // Total elapsed time in SECONDS
+            this.elapsed = 0;
             this.remaining = duration;
-            this.startTime = 0; // performance.now() timestamp when last started
-            this.elapsedBeforePause = 0; // Accumulated elapsed time before the current running segment
-
-            // State flags
             this.isRunning = false;
             this.isPaused = false;
             this.isFinished = false;
             this.chimeEnabled = true;
-
-            // Display optimization
-            this.lastDisplayedSeconds = -1;
+            this.lastUpdateTime = null;
+            // 'intervalId' is no longer needed.
 
             // Break settings
             this.breakCount = 3;
@@ -732,86 +695,38 @@
         }
 
         start() {
-            if (this.isRunning || this.isFinished || this.activeBreak) return;
-
+            if (this.isFinished || this.activeBreak) return;
+            // Simply set the flags. The global animation loop will handle the rest.
             this.isRunning = true;
             this.isPaused = false;
-            // Store the starting point of this running segment
-            this.startTime = performance.now();
-            startGlobalLoop(); // Ensure the main loop is running
+            this.lastUpdateTime = Date.now();
         }
 
         pause() {
-            if (!this.isRunning) return;
-
+            // Just set the flag. No interval to clear.
             this.isRunning = false;
             this.isPaused = true;
-            // Add the elapsed time from this segment to the total
-            this.elapsedBeforePause += (performance.now() - this.startTime) / 1000;
-            this.startTime = 0;
         }
 
         reset() {
             this.pause();
             this.elapsed = 0;
             this.remaining = this.duration;
-            this.elapsedBeforePause = 0;
-            this.startTime = 0;
             this.isFinished = false;
             this.isPaused = false;
             this.breaksUsed = [];
             this.activeBreak = null;
             this.onBreak = false;
-            this.lastDisplayedSeconds = -1;
-            updateTimerDisplay(this.id); // Force a visual update for the reset
-        }
-
-        update(now) {
-            if (this.isFinished) return;
-
-            let currentDisplayValue;
-
-            if (this.onBreak && this.activeBreak) {
-                // --- Break Timing Logic ---
-                const breakElapsed = (now - this.activeBreak.startTime) / 1000;
-                this.activeBreak.remaining = this.activeBreak.duration - breakElapsed;
-                currentDisplayValue = this.activeBreak.remaining;
-
-                if (this.activeBreak.remaining <= 0) {
-                    this.activeBreak.remaining = 0;
-                    this.endBreak(this.activeBreak.index);
-                }
-            } else if (this.isRunning) {
-                // --- Main Timer Logic ---
-                this.elapsed = this.elapsedBeforePause + (now - this.startTime) / 1000;
-
-                if (countDirection === 'down') {
-                    this.remaining = this.duration - this.elapsed;
-                    currentDisplayValue = this.remaining;
-                    if (this.remaining <= 0) this.finish();
-                } else {
-                    this.remaining = 0; // Not used in count up
-                    currentDisplayValue = this.elapsed;
-                    if (this.elapsed >= this.duration) this.finish();
-                }
-            } else {
-                return; // Not running and not on break, nothing to do
-            }
-
-            // --- Performance Optimization: Only update DOM when the second changes ---
-            const newSeconds = Math.ceil(currentDisplayValue);
-            if (newSeconds !== this.lastDisplayedSeconds) {
-                this.lastDisplayedSeconds = newSeconds;
-                updateTimerDisplay(this.id);
-            }
+            // We need to manually update display on reset
+            updateTimerDisplay(this.id);
         }
 
         finish() {
-            this.pause();
             this.remaining = 0;
             this.elapsed = this.duration;
+            this.isRunning = false;
             this.isFinished = true;
-
+            this.pause();
             if (this.chimeEnabled) playChime();
             updateTimerDisplay(this.id);
         }
@@ -819,18 +734,15 @@
         startBreak(breakIndex) {
             if (this.activeBreak || this.breaksUsed.includes(breakIndex)) return;
 
-            this.pause(); // Pause the main timer
+            this.pause();
             this.onBreak = true;
-
+            // Set up the break state object. The animation loop will update it.
             this.activeBreak = {
                 index: breakIndex,
                 duration: this.breakDuration * 60,
                 remaining: this.breakDuration * 60,
-                startTime: performance.now()
+                lastUpdateTime: Date.now(),
             };
-
-            this.lastDisplayedSeconds = -1; // Reset display cache
-            startGlobalLoop(); // Ensure main loop is running for the break
             updateTimerDisplay(this.id);
         }
 
@@ -842,25 +754,59 @@
             }
             this.activeBreak = null;
             this.onBreak = false;
-            this.lastDisplayedSeconds = -1; // Reset display cache
-            this.start(); // Automatically resume the main timer
+            this.start(); // Resume timer
             updateTimerDisplay(this.id);
         }
 
         cancelBreak() {
             if (!this.activeBreak) return;
             const breakIndex = this.activeBreak.index;
-            // Mark as used when cancelled
-            if (!this.breaksUsed.includes(breakIndex)) {
-               this.breaksUsed.push(breakIndex);
-            }
-            this.activeBreak = null;
-            this.onBreak = false;
-            this.lastDisplayedSeconds = -1;
-            this.start(); // Resume main timer
-            updateTimerDisplay(this.id);
+            this.endBreak(breakIndex);
         }
     }
+
+    // --- NEW: Global Animation Loop ---
+    // This single loop manages all active timers efficiently.
+    function animationLoop() {
+        const now = Date.now();
+
+        timers.forEach(timer => {
+            if (!timer.isRunning && !timer.onBreak) return; // Skip inactive timers
+
+            const delta = (now - timer.lastUpdateTime) / 1000;
+
+            if (timer.onBreak && timer.activeBreak) {
+                // Handle active break
+                timer.activeBreak.lastUpdateTime = now;
+                timer.activeBreak.remaining -= delta;
+
+                if (timer.activeBreak.remaining <= 0) {
+                    timer.activeBreak.remaining = 0;
+                    timer.endBreak(timer.activeBreak.index);
+                }
+            } else if (timer.isRunning) {
+                // Handle main timer
+                timer.lastUpdateTime = now;
+
+                if (countDirection === 'down') {
+                    timer.remaining -= delta;
+                    timer.elapsed = timer.duration - timer.remaining;
+                    if (timer.remaining <= 0) timer.finish();
+                } else {
+                    timer.elapsed += delta;
+                    timer.remaining = timer.duration - timer.elapsed;
+                    if (timer.elapsed >= timer.duration) timer.finish();
+                }
+            }
+
+            // Update the display for this timer on every frame
+            updateTimerDisplay(timer.id);
+        });
+
+        // Request the next frame to continue the loop
+        requestAnimationFrame(animationLoop);
+    }
+
 
     // Generate break buttons HTML
     function generateBreakButtons(timer) {
@@ -944,16 +890,35 @@
     // Get progress percentage
     function getProgress(timer) {
         if (timer.duration === 0) return 0;
-        const progress = (timer.elapsed / timer.duration) * 100;
+        const progress = countDirection === 'down' ?
+            ((timer.duration - timer.remaining) / timer.duration) * 100 :
+            (timer.elapsed / timer.duration) * 100;
         return Math.max(0, Math.min(100, progress));
     }
 
-    // Update timer display (now just renders state, doesn't calculate it)
+    // Update timer display
     function updateTimerDisplay(timerId) {
         const timer = timers.find(t => t.id === timerId);
         if (!timer) return;
         const card = document.getElementById(`timer-${timerId}`);
         if (!card) return;
+
+        let lastFormattedTime = card.dataset.lastTime || '';
+        let currentTimeToDisplay = timer.isFinished ? "Time's Up!" : formatTime(countDirection === 'down' ? timer.remaining : timer.elapsed);
+
+        // --- Optimization: Only update DOM if the text has changed ---
+        if (currentTimeToDisplay !== lastFormattedTime) {
+            const display = document.getElementById(`display-${timerId}`);
+            display.innerHTML = currentTimeToDisplay;
+            card.dataset.lastTime = currentTimeToDisplay;
+
+            if (timer.isFinished) {
+                display.classList.add('finished');
+                display.classList.remove('running');
+            } else {
+                display.classList.remove('finished');
+            }
+        }
 
         card.className = 'timer-card';
         if (timers.length > 4) card.classList.add('compact');
@@ -962,19 +927,7 @@
         else if (timer.isPaused) card.classList.add('paused');
 
         const display = document.getElementById(`display-${timerId}`);
-        if (timer.isFinished) {
-            display.innerHTML = "Exam Ended";
-            display.classList.add('finished');
-            display.classList.remove('running');
-        } else if (timer.onBreak && timer.activeBreak) {
-            display.innerHTML = formatTime(timer.activeBreak.remaining);
-            display.classList.remove('finished');
-            display.classList.add('running'); // Visually indicate break is active
-        } else {
-            display.innerHTML = formatTime(countDirection === 'down' ? timer.remaining : timer.elapsed);
-            display.classList.remove('finished');
-            display.classList.toggle('running', timer.isRunning);
-        }
+        display.classList.toggle('running', timer.isRunning);
         display.style.pointerEvents = (timer.isRunning || isUILocked || timer.activeBreak) ? 'none' : 'auto';
 
         document.getElementById(`progress-${timerId}`).style.width = `${getProgress(timer)}%`;
@@ -986,9 +939,32 @@
         startBtn.disabled = timer.isFinished || !!timer.activeBreak;
 
         const controlsRightContainer = card.querySelector('.timer-controls-right');
-        const newBreakButtonsHTML = `<button class="secondary" onclick="openBreakModal(${timer.id})">Edit Breaks</button>${generateBreakButtons(timer)}`;
-        if (controlsRightContainer.innerHTML !== newBreakButtonsHTML) {
-            controlsRightContainer.innerHTML = newBreakButtonsHTML;
+        if (controlsRightContainer) {
+            if (timer.activeBreak) {
+                const breakIndex = timer.activeBreak.index;
+                const activeBtn = document.getElementById(`break-btn-${timer.id}-${breakIndex}`);
+
+                const remaining = Math.ceil(timer.activeBreak.remaining);
+                const minutes = Math.floor(remaining / 60);
+                const seconds = remaining % 60;
+                const newText = `${minutes}m ${seconds}s`;
+
+                if (activeBtn && activeBtn.classList.contains('active')) {
+                    const span = activeBtn.querySelector('span');
+                    if (span && span.textContent !== newText) {
+                        span.textContent = newText;
+                    }
+                } else {
+                    const newHTML = `<button class="secondary" onclick="openBreakModal(${timer.id})">Edit Breaks</button>${generateBreakButtons(timer)}`;
+                    controlsRightContainer.innerHTML = newHTML;
+                }
+            } else {
+                const hasActiveButton = controlsRightContainer.querySelector('.break-btn.active');
+                if (hasActiveButton) {
+                    const newHTML = `<button class="secondary" onclick="openBreakModal(${timer.id})">Edit Breaks</button>${generateBreakButtons(timer)}`;
+                    controlsRightContainer.innerHTML = newHTML;
+                }
+            }
         }
 
         const chimeBtn = card.querySelector('button[onclick*="toggleChime"]');
@@ -1025,7 +1001,7 @@
         const timer = timers.find(t => t.id === timerId);
         if (!timer || timer.isFinished || timer.activeBreak) return;
         timer.isRunning ? timer.pause() : timer.start();
-        updateTimerDisplay(timerId);
+        updateTimerDisplay(timerId); // Immediate feedback
         saveState();
     }
 
@@ -1070,6 +1046,11 @@
             timer.breakCount = parseInt(document.getElementById('breakCount').value);
             timer.breakDuration = parseInt(document.getElementById('breakDuration').value);
             if (!timer.activeBreak) timer.breaksUsed = [];
+
+            const card = document.getElementById(`timer-${timer.id}`);
+            const controlsRightContainer = card.querySelector('.timer-controls-right');
+            const newHTML = `<button class="secondary" onclick="openBreakModal(${timer.id})">Edit Breaks</button>${generateBreakButtons(timer)}`;
+            controlsRightContainer.innerHTML = newHTML;
             updateTimerDisplay(currentBreakTimerId);
             saveState();
         }
@@ -1139,7 +1120,7 @@
             return;
         }
         timer.duration = (hours * 3600) + (minutes * 60);
-        timer.reset();
+        timer.reset(); // This will now update display
         saveState();
     }
 
@@ -1156,7 +1137,9 @@
 
     function resetAllTimers() {
         if (isUILocked) return;
-        timers.forEach(timer => timer.reset());
+        timers.forEach(timer => {
+            timer.reset();
+        });
         saveState();
     }
 
@@ -1223,10 +1206,9 @@
     function saveState() {
         const state = {
             timers: timers.map(t => ({
-                id: t.id, label: t.label, duration: t.duration,
-                elapsed: t.elapsed, // Save elapsed time directly
-                isPaused: t.isPaused, isFinished: t.isFinished, chimeEnabled: t.chimeEnabled,
-                breakCount: t.breakCount, breakDuration: t.breakDuration, breaksUsed: t.breaksUsed
+                id: t.id, label: t.label, duration: t.duration, elapsed: t.elapsed, remaining: t.remaining,
+                isPaused: t.isPaused, isFinished: t.isFinished, chimeEnabled: t.chimeEnabled, breakCount: t.breakCount,
+                breakDuration: t.breakDuration, breaksUsed: t.breaksUsed, onBreak: false
             })),
             timerIdCounter, isUILocked, countDirection, globalVolume, currentTheme
         };
@@ -1245,16 +1227,12 @@
             currentTheme = state.currentTheme || 'light';
             timers = state.timers.map(t_state => {
                 const timer = new Timer(t_state.id, t_state.label, t_state.duration);
-                // Restore state
-                timer.elapsed = t_state.elapsed || 0;
-                timer.elapsedBeforePause = timer.elapsed; // Set the paused state correctly
-                timer.remaining = timer.duration - timer.elapsed;
-                timer.isPaused = true; // Always load in a paused state
-                timer.isFinished = t_state.isFinished || false;
-                timer.chimeEnabled = t_state.chimeEnabled;
-                timer.breakCount = t_state.breakCount;
-                timer.breakDuration = t_state.breakDuration;
-                timer.breaksUsed = t_state.breaksUsed || [];
+                Object.assign(timer, t_state);
+                // Ensure timers load in a non-running state
+                timer.isRunning = false;
+                if (t_state.isPaused) { // If it was paused, keep it paused
+                   timer.isPaused = true;
+                }
                 return timer;
             });
             document.body.setAttribute('data-theme', currentTheme);
@@ -1264,7 +1242,7 @@
             document.getElementById('volumeSlider').value = globalVolume * 100;
             document.getElementById('volumeLabel').textContent = `${Math.round(globalVolume * 100)}%`;
             if (isUILocked) {
-                isUILocked = false; // Set to inverse so toggle sets it correctly
+                isUILocked = false;
                 toggleUILock();
             } else {
                 renderTimers();
@@ -1272,9 +1250,12 @@
         } catch (e) { console.error('Failed to load state:', e); }
     }
 
+
     // Initialize on load
     window.addEventListener('load', () => {
         loadState();
+        // Kick off the one and only animation loop
+        requestAnimationFrame(animationLoop);
         document.addEventListener('click', initAudioContext, { once: true });
     });
 

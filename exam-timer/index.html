@@ -206,6 +206,7 @@
             background: var(--border-color);
             outline: none;
             -webkit-appearance: none;
+            appearance: none;
         }
 
         input[type="range"]::-webkit-slider-thumb {
@@ -288,7 +289,7 @@
             font-size: 1.15rem;
             font-weight: 600;
             cursor: pointer;
-            padding: 0.25rem 0.5rem;
+            padding: 0.2rem 0 0 0;
             border-radius: 2px;
             transition: background-color 0.2s;
             position: relative;
@@ -351,9 +352,9 @@
         }
 
         .timer-display.finished {
-            color: var(--danger-color);
+            color: var(--text-primary);
             cursor: default;
-            font-size: 3rem;
+            font-size: 1rem;
         }
 
         /* Progress bar */
@@ -361,7 +362,7 @@
             width: 100%;
             height: 20px;
             background-color: var(--border-color);
-            border-radius: 4px;
+            border-radius: 3px;
             overflow: hidden;
             position: relative;
         }
@@ -962,7 +963,7 @@
 
         const display = document.getElementById(`display-${timerId}`);
         if (timer.isFinished) {
-            display.innerHTML = "Time's Up!";
+            display.innerHTML = "Exam Ended";
             display.classList.add('finished');
             display.classList.remove('running');
         } else if (timer.onBreak && timer.activeBreak) {

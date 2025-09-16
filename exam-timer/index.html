@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Exam Timer Manager v4.3</title>
+    <title>Exam Timer Manager v1.0</title>
     <style>
         /* CSS Variables for theming */
         :root {
@@ -206,6 +206,7 @@
             background: var(--border-color);
             outline: none;
             -webkit-appearance: none;
+            appearance: none;
         }
 
         input[type="range"]::-webkit-slider-thumb {
@@ -669,143 +670,153 @@
         oscillator.stop(audioContext.currentTime + 0.5);
     }
 
-    // --- REFACTORED TIMER CLASS ---
-    // The class is now much simpler. It no longer manages intervals.
-    // It only manages its own state (running, paused, finished, etc.).
     class Timer {
-        constructor(id, label = 'Timer', duration = 3600) {
-            this.id = id;
-            this.label = label;
-            this.duration = duration; // in seconds
-            this.elapsed = 0;
-            this.remaining = duration;
-            this.isRunning = false;
-            this.isPaused = false;
-            this.isFinished = false;
-            this.chimeEnabled = true;
-            this.lastUpdateTime = null;
-            // 'intervalId' is no longer needed.
+    constructor(id, label = 'Timer', duration = 3600) {
+        this.id = id;
+        this.label = label;
+        this.duration = duration; // in seconds
+        this.elapsed = 0;
+        this.remaining = duration;
+        this.isRunning = false;
+        this.isPaused = false;
+        this.isFinished = false;
+        this.chimeEnabled = true;
+        // lastUpdateTime is no longer needed
 
-            // Break settings
-            this.breakCount = 3;
-            this.breakDuration = 5; // minutes
-            this.breaksUsed = [];
-            this.activeBreak = null;
-            this.onBreak = false;
-        }
-
-        start() {
-            if (this.isFinished || this.activeBreak) return;
-            // Simply set the flags. The global animation loop will handle the rest.
-            this.isRunning = true;
-            this.isPaused = false;
-            this.lastUpdateTime = Date.now();
-        }
-
-        pause() {
-            // Just set the flag. No interval to clear.
-            this.isRunning = false;
-            this.isPaused = true;
-        }
-
-        reset() {
-            this.pause();
-            this.elapsed = 0;
-            this.remaining = this.duration;
-            this.isFinished = false;
-            this.isPaused = false;
-            this.breaksUsed = [];
-            this.activeBreak = null;
-            this.onBreak = false;
-            // We need to manually update display on reset
-            updateTimerDisplay(this.id);
-        }
-
-        finish() {
-            this.remaining = 0;
-            this.elapsed = this.duration;
-            this.isRunning = false;
-            this.isFinished = true;
-            this.pause();
-            if (this.chimeEnabled) playChime();
-            updateTimerDisplay(this.id);
-        }
-
-        startBreak(breakIndex) {
-            if (this.activeBreak || this.breaksUsed.includes(breakIndex)) return;
-
-            this.pause();
-            this.onBreak = true;
-            // Set up the break state object. The animation loop will update it.
-            this.activeBreak = {
-                index: breakIndex,
-                duration: this.breakDuration * 60,
-                remaining: this.breakDuration * 60,
-                lastUpdateTime: Date.now(),
-            };
-            updateTimerDisplay(this.id);
-        }
-
-        endBreak(breakIndex) {
-            if (!this.activeBreak || this.activeBreak.index !== breakIndex) return;
-
-            if (!this.breaksUsed.includes(breakIndex)) {
-               this.breaksUsed.push(breakIndex);
-            }
-            this.activeBreak = null;
-            this.onBreak = false;
-            this.start(); // Resume timer
-            updateTimerDisplay(this.id);
-        }
-
-        cancelBreak() {
-            if (!this.activeBreak) return;
-            const breakIndex = this.activeBreak.index;
-            this.endBreak(breakIndex);
-        }
+        // Break settings
+        this.breakCount = 3;
+        this.breakDuration = 5; // minutes
+        this.breaksUsed = [];
+        this.activeBreak = null;
+        this.onBreak = false;
     }
 
-    // --- NEW: Global Animation Loop ---
-    // This single loop manages all active timers efficiently.
-    function animationLoop() {
-        const now = Date.now();
+    start() {
+        if (this.isFinished || this.activeBreak) return;
+        // Simply set the flags. The global animation loop will handle the rest.
+        this.isRunning = true;
+        this.isPaused = false;
+        // No lastUpdateTime needed
+    }
 
-        timers.forEach(timer => {
-            if (!timer.isRunning && !timer.onBreak) return; // Skip inactive timers
+    pause() {
+        // Just set the flag. No interval to clear.
+        this.isRunning = false;
+        this.isPaused = true;
+    }
 
-            const delta = (now - timer.lastUpdateTime) / 1000;
+    reset() {
+        this.pause();
+        this.elapsed = 0;
+        this.remaining = this.duration;
+        this.isFinished = false;
+        this.isPaused = false;
+        this.breaksUsed = [];
+        this.activeBreak = null;
+        this.onBreak = false;
+        // We need to manually update display on reset
+        updateTimerDisplay(this.id);
+    }
 
-            if (timer.onBreak && timer.activeBreak) {
-                // Handle active break
-                timer.activeBreak.lastUpdateTime = now;
-                timer.activeBreak.remaining -= delta;
+    finish() {
+        this.remaining = 0;
+        this.elapsed = this.duration;
+        this.isRunning = false;
+        this.isFinished = true;
+        this.pause();
+        if (this.chimeEnabled) playChime();
+        updateTimerDisplay(this.id);
+    }
 
-                if (timer.activeBreak.remaining <= 0) {
-                    timer.activeBreak.remaining = 0;
-                    timer.endBreak(timer.activeBreak.index);
-                }
-            } else if (timer.isRunning) {
-                // Handle main timer
-                timer.lastUpdateTime = now;
+    startBreak(breakIndex) {
+        if (this.activeBreak || this.breaksUsed.includes(breakIndex)) return;
 
-                if (countDirection === 'down') {
-                    timer.remaining -= delta;
-                    timer.elapsed = timer.duration - timer.remaining;
-                    if (timer.remaining <= 0) timer.finish();
-                } else {
-                    timer.elapsed += delta;
-                    timer.remaining = timer.duration - timer.elapsed;
-                    if (timer.elapsed >= timer.duration) timer.finish();
-                }
-            }
+        this.pause();
+        this.onBreak = true;
+        // Set up the break state object. The animation loop will update it.
+        this.activeBreak = {
+            index: breakIndex,
+            duration: this.breakDuration * 60,
+            remaining: this.breakDuration * 60,
+            // No lastUpdateTime needed
+        };
+        updateTimerDisplay(this.id);
+    }
 
-            // Update the display for this timer on every frame
-            updateTimerDisplay(timer.id);
-        });
+    endBreak(breakIndex) {
+        if (!this.activeBreak || this.activeBreak.index !== breakIndex) return;
 
-        // Request the next frame to continue the loop
+        if (!this.breaksUsed.includes(breakIndex)) {
+           this.breaksUsed.push(breakIndex);
+        }
+        this.activeBreak = null;
+        this.onBreak = false;
+        this.start(); // Resume timer
+        updateTimerDisplay(this.id);
+    }
+
+    cancelBreak() {
+        if (!this.activeBreak) return;
+        const breakIndex = this.activeBreak.index;
+        this.endBreak(breakIndex);
+    }
+}
+
+let lastFrameTime = null;
+
+function animationLoop(timestamp) {
+    // Initialize on first frame
+    if (lastFrameTime === null) {
+        lastFrameTime = timestamp;
         requestAnimationFrame(animationLoop);
+        return;
     }
+
+    // Calculate delta using high-resolution timestamp
+    const deltaMs = timestamp - lastFrameTime;
+
+    // Skip this frame if delta is too large (tab was backgrounded)
+    // or too small (duplicate frame)
+    if (deltaMs > 1000 || deltaMs < 8) {
+        lastFrameTime = timestamp;
+        requestAnimationFrame(animationLoop);
+        return;
+    }
+
+    const deltaSeconds = deltaMs / 1000;
+    lastFrameTime = timestamp;
+
+    timers.forEach(timer => {
+        if (!timer.isRunning && !timer.onBreak) return; // Skip inactive timers
+
+        if (timer.onBreak && timer.activeBreak) {
+            // Handle active break
+            timer.activeBreak.remaining -= deltaSeconds;
+
+            if (timer.activeBreak.remaining <= 0) {
+                timer.activeBreak.remaining = 0;
+                timer.endBreak(timer.activeBreak.index);
+            }
+        } else if (timer.isRunning) {
+            // Handle main timer
+            if (countDirection === 'down') {
+                timer.remaining -= deltaSeconds;
+                timer.elapsed = timer.duration - timer.remaining;
+                if (timer.remaining <= 0) timer.finish();
+            } else {
+                timer.elapsed += deltaSeconds;
+                timer.remaining = timer.duration - timer.elapsed;
+                if (timer.elapsed >= timer.duration) timer.finish();
+            }
+        }
+
+        // Update the display for this timer on every frame
+        updateTimerDisplay(timer.id);
+    });
+
+    // Request the next frame to continue the loop
+    requestAnimationFrame(animationLoop);
+}
 
 
     // Generate break buttons HTML
@@ -1251,15 +1262,15 @@
     }
 
 
-    // Initialize on load
+    // Update the initialization to properly start the animation loop
     window.addEventListener('load', () => {
         loadState();
-        // Kick off the one and only animation loop
+        // Reset the lastFrameTime when starting
+        lastFrameTime = null;
+        // Kick off the animation loop
         requestAnimationFrame(animationLoop);
         document.addEventListener('click', initAudioContext, { once: true });
     });
-
-    window.addEventListener('beforeunload', saveState);
 </script>
 
 </body>

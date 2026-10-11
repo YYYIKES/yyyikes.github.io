@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Exam Timer Manager v1.1 ƒ</title>
+    <title>Exam Timer Manager v1.2 ƒ</title>
     <style>
         /* CSS Variables for theming */
         :root {
@@ -864,14 +864,14 @@
                 <div class="timer-display" onclick="editTime(${timer.id})" id="display-${timer.id}"></div>
                 <div class="progress-container">
                     <div class="progress-bar"><div class="progress-fill" id="progress-${timer.id}"></div></div>
-                    <span class="duration-label">${formatTime(timer.duration)}</span>
+                    <span class="duration-label" id="duration-label-${timer.id}">${formatTime(timer.duration)}</span>
                 </div>
             </div>
         ` : `
             <div class="timer-display" onclick="editTime(${timer.id})" id="display-${timer.id}"></div>
             <div class="progress-container">
                 <div class="progress-bar"><div class="progress-fill" id="progress-${timer.id}"></div></div>
-                <span class="duration-label">${formatTime(timer.duration)}</span>
+                <span class="duration-label" id="duration-label-${timer.id}">${formatTime(timer.duration)}</span>
             </div>
         `;
 
@@ -952,6 +952,13 @@
             display.style.pointerEvents = (timer.isRunning || isUILocked || timer.activeBreak) ? 'none' : 'auto';
 
             document.getElementById(`progress-${timerId}`).style.width = `${getProgress(timer)}%`;
+
+            // Keep the duration label in sync with the timer's current duration
+            const durationLabel = document.getElementById(`duration-label-${timerId}`);
+            if (durationLabel) {
+                const durationText = formatTime(timer.duration);
+                if (durationLabel.textContent !== durationText) durationLabel.textContent = durationText;
+            }
 
             const startBtn = document.getElementById(`start-${timerId}`);
             if (timer.isRunning) startBtn.textContent = 'Pause';

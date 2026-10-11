@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Exam Timer Manager v1.2 ƒ</title>
+    <title>Exam Timer Manager v1.3 ƒ</title>
     <style>
         /* CSS Variables for theming */
         :root {
@@ -655,6 +655,9 @@
             if (!audioContext) {
                 audioContext = new AudioContext();
             }
+            if (audioContext.state === 'suspended') {
+                audioContext.resume().catch(() => {});
+            }
         }
 
         // Play chime sound
@@ -727,13 +730,13 @@
                 updateTimerDisplay(this.id);
             }
 
-            finish() {
+            finish(silent = false) {
                 this.remaining = 0;
                 this.elapsed = this.duration;
                 this.isRunning = false;
                 this.isFinished = true;
                 this.pause();
-                if (this.chimeEnabled) playChime();
+                if (this.chimeEnabled && !silent) playChime();
                 updateTimerDisplay(this.id);
             }
 
@@ -771,60 +774,47 @@
             }
         }
 
-        let lastFrameTime = null;
+        // ---- Timing -------------------------------------------------------
+        // Time is measured against the wall clock (Date.now()), not animation
+        // frames, so nothing is lost when the tab is hidden, throttled or asleep.
+        let lastTickTime = null;
 
-        function animationLoop(timestamp) {
-            // Initialize on first frame
-            if (lastFrameTime === null) {
-                lastFrameTime = timestamp;
-                requestAnimationFrame(animationLoop);
-                return;
+        // Advance one timer by dt seconds (handles an active break, then the main
+        // timer, including any time left over once a break ends).
+        function advanceTimer(timer, dt, silent = false) {
+            if (dt <= 0) return;
+            if (timer.onBreak && timer.activeBreak) {
+                timer.activeBreak.remaining -= dt;
+                if (timer.activeBreak.remaining <= 0) {
+                    const leftover = -timer.activeBreak.remaining;
+                    timer.activeBreak.remaining = 0;
+                    timer.endBreak(timer.activeBreak.index); // resumes the main timer
+                    if (leftover > 0) advanceTimer(timer, leftover, silent);
+                }
+            } else if (timer.isRunning) {
+                timer.elapsed += dt;
+                timer.remaining = timer.duration - timer.elapsed;
+                if (timer.remaining <= 0) timer.finish(silent);
             }
+        }
 
-            // Calculate delta using high-resolution timestamp
-            const deltaMs = timestamp - lastFrameTime;
-
-            // Skip only if delta is negative or extremely small (duplicate frame)
-            if (deltaMs < 8) {
-                requestAnimationFrame(animationLoop);
-                return;
-            }
-
-            // Cap the delta at 5 seconds to prevent huge jumps if tab was suspended for very long
-            // but still allow catching up when tab regains focus
-            const cappedDeltaMs = Math.min(deltaMs, 5000);
-            const deltaSeconds = cappedDeltaMs / 1000;
-            lastFrameTime = timestamp;
+        function tick() {
+            const now = Date.now();
+            if (lastTickTime === null) { lastTickTime = now; return; }
+            const dt = (now - lastTickTime) / 1000;
+            lastTickTime = now;
+            if (dt <= 0) return; // clock moved backwards; ignore
 
             timers.forEach(timer => {
                 if (!timer.isRunning && !timer.onBreak) return; // Skip inactive timers
-
-                if (timer.onBreak && timer.activeBreak) {
-                    // Handle active break
-                    timer.activeBreak.remaining -= deltaSeconds;
-
-                    if (timer.activeBreak.remaining <= 0) {
-                        timer.activeBreak.remaining = 0;
-                        timer.endBreak(timer.activeBreak.index);
-                    }
-                } else if (timer.isRunning) {
-                    // Handle main timer
-                    if (countDirection === 'down') {
-                        timer.remaining -= deltaSeconds;
-                        timer.elapsed = timer.duration - timer.remaining;
-                        if (timer.remaining <= 0) timer.finish();
-                    } else {
-                        timer.elapsed += deltaSeconds;
-                        timer.remaining = timer.duration - timer.elapsed;
-                        if (timer.elapsed >= timer.duration) timer.finish();
-                    }
-                }
-
-                // Update the display for this timer on every frame
+                advanceTimer(timer, dt);
                 updateTimerDisplay(timer.id);
             });
+        }
 
-            // Request the next frame to continue the loop
+        // Smooth display updates while the tab is visible
+        function animationLoop() {
+            tick();
             requestAnimationFrame(animationLoop);
         }
 
@@ -877,7 +867,7 @@
 
             card.innerHTML = `
             <div class="timer-header">
-                <div class="timer-label" onclick="editLabel(${timer.id})" id="label-${timer.id}">${timer.label}</div>
+                <div class="timer-label" onclick="editLabel(${timer.id})" id="label-${timer.id}"></div>
                 <button class="icon-button danger" onclick="removeTimer(${timer.id})">×</button>
             </div>
             ${timeAndProgressHTML}
@@ -893,6 +883,7 @@
                 </div>
             </div>
         `;
+            card.querySelector('.timer-label').textContent = timer.label;
             return card;
         }
 
@@ -1071,9 +1062,17 @@
         function saveBreakSettings() {
             const timer = timers.find(t => t.id === currentBreakTimerId);
             if (timer) {
-                timer.breakCount = parseInt(document.getElementById('breakCount').value);
-                timer.breakDuration = parseInt(document.getElementById('breakDuration').value);
-                if (!timer.activeBreak) timer.breaksUsed = [];
+                const clampInt = (v, min, max, fallback) => {
+                    const n = parseInt(v, 10);
+                    return Number.isNaN(n) ? fallback : Math.min(max, Math.max(min, n));
+                };
+                let newCount = clampInt(document.getElementById('breakCount').value, 0, 10, timer.breakCount);
+                // Never drop the break that is currently in progress
+                if (timer.activeBreak) newCount = Math.max(newCount, timer.activeBreak.index + 1);
+                timer.breakCount = newCount;
+                timer.breakDuration = clampInt(document.getElementById('breakDuration').value, 1, 60, timer.breakDuration);
+                // Keep record of breaks already taken (they are only refunded by Reset)
+                timer.breaksUsed = timer.breaksUsed.filter(i => i < timer.breakCount);
 
                 const card = document.getElementById(`timer-${timer.id}`);
                 const controlsRightContainer = card.querySelector('.timer-controls-right');
@@ -1113,13 +1112,13 @@
             input.value = timer.label;
             const save = () => {
                 timer.label = input.value.trim() || `Timer ${timerId + 1}`;
-                labelElement.innerHTML = timer.label;
+                labelElement.textContent = timer.label;
                 saveState();
             };
             input.onblur = save;
             input.onkeydown = (e) => {
                 if (e.key === 'Enter') input.blur();
-                else if (e.key === 'Escape') labelElement.innerHTML = timer.label;
+                else if (e.key === 'Escape') labelElement.textContent = timer.label;
             };
 
             labelElement.innerHTML = '';
@@ -1145,6 +1144,10 @@
 
             if (hours > 23 || minutes > 59) {
                 showAlert('Invalid Time', 'Invalid time format. Hours must be 0-23, minutes must be 0-59.');
+                return;
+            }
+            if (hours === 0 && minutes === 0) {
+                showAlert('Invalid Time', 'Duration must be at least 1 minute.');
                 return;
             }
             timer.duration = (hours * 3600) + (minutes * 60);
@@ -1236,11 +1239,15 @@
                 timers: timers.map(t => ({
                     id: t.id, label: t.label, duration: t.duration, elapsed: t.elapsed, remaining: t.remaining,
                     isPaused: t.isPaused, isFinished: t.isFinished, chimeEnabled: t.chimeEnabled, breakCount: t.breakCount,
-                    breakDuration: t.breakDuration, breaksUsed: t.breaksUsed, onBreak: false
+                    breakDuration: t.breakDuration, breaksUsed: t.breaksUsed,
+                    isRunning: t.isRunning, onBreak: t.onBreak, activeBreak: t.activeBreak
                 })),
-                timerIdCounter, isUILocked, countDirection, globalVolume, currentTheme
+                timerIdCounter, isUILocked, countDirection, globalVolume, currentTheme,
+                savedAt: Date.now()
             };
-            localStorage.setItem('examTimerState', JSON.stringify(state));
+            try {
+                localStorage.setItem('examTimerState', JSON.stringify(state));
+            } catch (e) { console.error('Failed to save state:', e); }
         }
 
         function loadState() {
@@ -1251,16 +1258,19 @@
                 timerIdCounter = state.timerIdCounter || 0;
                 isUILocked = state.isUILocked || false;
                 countDirection = state.countDirection || 'down';
-                globalVolume = state.globalVolume || 0.5;
+                globalVolume = state.globalVolume ?? 0.5;
                 currentTheme = state.currentTheme || 'light';
+                // Time that passed since the state was saved (page closed / refreshed / crashed)
+                const secondsSinceSave = state.savedAt ? Math.max(0, (Date.now() - state.savedAt) / 1000) : 0;
                 timers = state.timers.map(t_state => {
                     const timer = new Timer(t_state.id, t_state.label, t_state.duration);
                     Object.assign(timer, t_state);
-                    // Ensure timers load in a non-running state
-                    timer.isRunning = false;
-                    if (t_state.isPaused) { // If it was paused, keep it paused
-                        timer.isPaused = true;
-                    }
+                    timer.isRunning = !!t_state.isRunning;
+                    timer.breaksUsed = Array.isArray(t_state.breaksUsed) ? t_state.breaksUsed : [];
+                    timer.activeBreak = t_state.activeBreak || null;
+                    timer.onBreak = !!timer.activeBreak;
+                    // Running timers and breaks carry on, accounting for the time that has passed
+                    advanceTimer(timer, secondsSinceSave, true);
                     return timer;
                 });
                 document.body.setAttribute('data-theme', currentTheme);
@@ -1282,11 +1292,14 @@
         // Update the initialization to properly start the animation loop
         window.addEventListener('load', () => {
             loadState();
-            // Reset the lastFrameTime when starting
-            lastFrameTime = null;
-            // Kick off the animation loop
+            lastTickTime = Date.now();
+            // Smooth updates while visible; the interval keeps time (and chimes) going in background tabs
             requestAnimationFrame(animationLoop);
-            document.addEventListener('click', initAudioContext, { once: true });
+            setInterval(tick, 250);
+            document.addEventListener('visibilitychange', tick);
+            // Periodic safety save
+            setInterval(saveState, 5000);
+            ['click', 'keydown', 'touchstart'].forEach(evt => document.addEventListener(evt, initAudioContext));
         });
     </script>
 

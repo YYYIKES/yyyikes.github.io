@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Exam Timer Manager v1.3 ƒ</title>
+    <title>Exam Timer Manager v1.4 ƒ</title>
     <style>
         /* CSS Variables for theming */
         :root {
@@ -347,6 +347,14 @@
             font-size: 6rem;
         }
 
+        /* Total exam duration shown beside the elapsed time in Count Up mode */
+        .timer-display .duration-total {
+            font-size: 0.4em;
+            font-weight: 300;
+            color: var(--text-secondary);
+            margin-left: 0.25em;
+        }
+
         .timer-display:hover:not(.running) {
             background-color: var(--bg-secondary);
         }
@@ -432,6 +440,7 @@
             padding: 0;
             text-align: left;
             flex-shrink: 0;
+            max-width: 65%; /* leave room for the progress bar; text is scaled to fit */
         }
 
         .timer-card.compact .progress-container {
@@ -854,14 +863,14 @@
                 <div class="timer-display" onclick="editTime(${timer.id})" id="display-${timer.id}"></div>
                 <div class="progress-container">
                     <div class="progress-bar"><div class="progress-fill" id="progress-${timer.id}"></div></div>
-                    <span class="duration-label" id="duration-label-${timer.id}">${formatTime(timer.duration)}</span>
+                    <span class="duration-label" id="duration-label-${timer.id}">${formatDurationLabel(timer.duration)}</span>
                 </div>
             </div>
         ` : `
             <div class="timer-display" onclick="editTime(${timer.id})" id="display-${timer.id}"></div>
             <div class="progress-container">
                 <div class="progress-bar"><div class="progress-fill" id="progress-${timer.id}"></div></div>
-                <span class="duration-label" id="duration-label-${timer.id}">${formatTime(timer.duration)}</span>
+                <span class="duration-label" id="duration-label-${timer.id}">${formatDurationLabel(timer.duration)}</span>
             </div>
         `;
 
@@ -899,6 +908,38 @@
             return minutes > 0 ? `${minutes}m ${String(secs).padStart(2, '0')}s` : `${secs}s`;
         }
 
+        // Duration label: hours and minutes only (e.g. "2h 30m", "45m")
+        function formatDurationLabel(seconds) {
+            const totalMinutes = Math.floor(seconds / 60);
+            const hours = Math.floor(totalMinutes / 60);
+            const minutes = totalMinutes % 60;
+            if (hours > 0) return `${hours}h ${String(minutes).padStart(2, '0')}m`;
+            if (totalMinutes > 0) return `${minutes}m`;
+            return `${Math.floor(seconds)}s`;
+        }
+
+        // Shrink the text of a timer display (never grow it) so it fits its box
+        function fitDisplayText(display) {
+            display.style.fontSize = '';
+            if (display.classList.contains('finished')) return;
+            const available = display.clientWidth;
+            const needed = display.scrollWidth;
+            if (available > 0 && needed > available) {
+                const base = parseFloat(getComputedStyle(display).fontSize);
+                display.style.fontSize = `${Math.max(12, Math.floor(base * (available / needed) * 0.98))}px`;
+            }
+        }
+
+        function refitAllDisplays() {
+            document.querySelectorAll('.timer-display').forEach(fitDisplayText);
+        }
+
+        let resizeFitTimeout = null;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeFitTimeout);
+            resizeFitTimeout = setTimeout(refitAllDisplays, 100);
+        });
+
         // Get progress percentage
         function getProgress(timer) {
             if (timer.duration === 0) return 0;
@@ -915,20 +956,42 @@
             const card = document.getElementById(`timer-${timerId}`);
             if (!card) return;
 
-            let lastFormattedTime = card.dataset.lastTime || '';
-            let currentTimeToDisplay = timer.isFinished ? "Exam has ended." : formatTime(countDirection === 'down' ? timer.remaining : timer.elapsed);
+            // Count Down: remaining time. Count Up: elapsed time plus the total duration.
+            let mainText, totalText = '';
+            if (timer.isFinished) {
+                mainText = 'Exam has ended.';
+            } else if (countDirection === 'down') {
+                mainText = formatTime(timer.remaining);
+            } else {
+                mainText = formatTime(timer.elapsed);
+                totalText = `/ ${formatDurationLabel(timer.duration)}`;
+            }
+            const displayKey = `${mainText}|${totalText}`;
 
             // --- Optimization: Only update DOM if the text has changed ---
-            if (currentTimeToDisplay !== lastFormattedTime) {
+            if (displayKey !== card.dataset.lastTime) {
                 const display = document.getElementById(`display-${timerId}`);
-                display.innerHTML = currentTimeToDisplay;
-                card.dataset.lastTime = currentTimeToDisplay;
+                display.textContent = mainText;
+                if (totalText) {
+                    const totalSpan = document.createElement('span');
+                    totalSpan.className = 'duration-total';
+                    totalSpan.textContent = totalText;
+                    display.appendChild(totalSpan);
+                }
+                card.dataset.lastTime = displayKey;
 
                 if (timer.isFinished) {
                     display.classList.add('finished');
                     display.classList.remove('running');
                 } else {
                     display.classList.remove('finished');
+                }
+
+                // Digits are fixed-width, so the fit only needs recomputing when the text length changes
+                const fitKey = `${countDirection}|${timer.isFinished}|${mainText.length}|${totalText}`;
+                if (display.dataset.fitKey !== fitKey) {
+                    display.dataset.fitKey = fitKey;
+                    fitDisplayText(display);
                 }
             }
 
@@ -947,7 +1010,7 @@
             // Keep the duration label in sync with the timer's current duration
             const durationLabel = document.getElementById(`duration-label-${timerId}`);
             if (durationLabel) {
-                const durationText = formatTime(timer.duration);
+                const durationText = formatDurationLabel(timer.duration);
                 if (durationLabel.textContent !== durationText) durationLabel.textContent = durationText;
             }
 
